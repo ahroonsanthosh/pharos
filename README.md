@@ -48,6 +48,11 @@ pharos sync cam.mkv --log flight.bin --log-sync 1 --hfov 77 --start 300
 pharos probe cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5
 ```
 
+Recorded footage is solved as a whole flight, so a turn or a gap is bridged
+from both sides; `--causal` reports only what a live run would have. Give
+`--map-accuracy` when the reference map itself may be metres off (e.g. 6 for
+NAIP), so reported uncertainties include it.
+
 It writes `track.geojson`, `track.kml` (opens in Google Earth), `track.csv`,
 an overview image, and `summary.json`. When the footage carries its own GPS,
 the summary scores Pharos against it. The dashboard offers the same exports
