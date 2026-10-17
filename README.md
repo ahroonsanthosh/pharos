@@ -10,22 +10,31 @@ rotation, construction and felling. It runs on a CPU with no learned weights.
 A simulator generates realistic test flights so the full pipeline can be
 developed and benchmarked before any hardware exists.
 
-## Quick start
+## Run it on a laptop
 
 ```bash
-pip install -e ".[dev]"          # add ,geo for GeoTIFF maps
-
-pytest -q                        # unit + small end-to-end tests (~15 s)
-pharos bench configs/scenarios/*.yaml -o runs/bench    # full benchmark
-
-# or step by step, through the same on-disk format a real flight uses
-pharos simulate configs/scenarios/autumn_low_sun.yaml -o runs/autumn
-pharos localize --map runs/autumn/map.json --recording runs/autumn/recording -o runs/autumn/out
+git clone https://github.com/ahroonsanthosh/pharos.git && cd pharos
+docker compose up            # then open http://localhost:8000
 ```
 
-`localize` writes `estimates.jsonl` (position, lat/lon, heading, uncertainty
-and status per frame), `track.png`, and `metrics.json` when the recording
-has ground truth.
+The dashboard takes feeds from anywhere: a DJI controller or OBS pushing
+RTMP/SRT, RTSP/HLS/UDP stream URLs, an HDMI capture card or webcam, recorded
+videos with DJI `.SRT` telemetry, or a built-in demo flight. Telemetry
+comes from MAVLink (ArduPilot/PX4), DJI subtitle files or manual entry. When
+the aircraft reports GPS, it is drawn next to the visual estimate, so every
+real flight measures accuracy. Setup for each source is in
+[docs/laptop.md](docs/laptop.md).
+
+## Develop
+
+```bash
+pip install -e ".[dev,server,geo]"
+pytest -q                                  # unit + end-to-end tests
+pharos bench -j 4 -o runs/bench            # all built-in scenarios
+pharos simulate autumn_low_sun -o runs/autumn      # a flight in the recording format
+pharos localize --map runs/autumn/map.json --recording runs/autumn/recording -o runs/autumn/out
+pharos serve --open                        # dashboard without Docker
+```
 
 ## How it works
 
@@ -45,18 +54,18 @@ Each estimate carries a status: `lost`, `converging` (a candidate, not yet
 trustworthy) or `tracking`. Details and design rationale are in
 [docs/architecture.md](docs/architecture.md).
 
-## Maps and video
+## Maps
 
 Any north-up orthophoto works. Free sources include USGS NAIP, national
 programmes such as IGN, swisstopo and PDOK, OpenAerialMap and Sentinel-2.
-Video can come from any file or stream OpenCV decodes, plus a telemetry log.
 See [docs/data.md](docs/data.md) for sources, licences and the recording
 format.
 
 ## Benchmark
 
-Ten scenarios in `configs/scenarios/`, each a 60 s flight at 180 m over a
-1.6 km × 1.6 km world, localized at 2 Hz against a summer reference map:
+Ten scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight at 180 m
+over a 1.6 km × 1.6 km world, localized at 2 Hz against a summer reference
+map:
 
 <!-- bench:start -->
 <!-- bench:end -->
@@ -73,9 +82,10 @@ src/pharos/
   geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
   vision/   rectify, features, correlate, matcher
   nav/      filter, localizer
-  sim/      world, appearance, trajectory, flight, scenario, procedural
+  sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml
   eval/     metrics, plot, bench
-configs/scenarios/   benchmark scenarios (YAML)
-docs/                architecture, data sources
+  server/   app, feeds, telemetry, store, static/ (dashboard)
+docs/       laptop setup, architecture, data sources
 tests/
+Dockerfile  compose.yaml
 ```

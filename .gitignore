@@ -10,3 +10,4 @@ dist/
 # generated data and run outputs
 runs/
 data/
+pharos-data/

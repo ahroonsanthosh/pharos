@@ -29,7 +29,8 @@ GNSS and no learned weights, and it runs on a CPU.
 | `nav.localizer` | Multi-hypothesis acquisition, confirmation and tracking state machine. |
 | `sim.*` | Procedural world, seasonal/lighting appearance, trajectories, sensor models, rendering. |
 | `eval.*` | Metrics, track plots, scenario benchmark. |
-| `cli` | `pharos simulate`, `pharos localize`, `pharos bench`. |
+| `server.*` | Live service: feed runner (any video source + telemetry), MAVLink and DJI SRT telemetry, map store, FastAPI app and dashboard. |
+| `cli` | `pharos simulate`, `pharos localize`, `pharos bench`, `pharos serve`. |
 
 ## Conventions
 

@@ -1,0 +1,23 @@
+# Pharos on a laptop: `docker compose up`, then open http://localhost:8000
+services:
+  pharos:
+    build: .
+    ports:
+      - "8000:8000"          # dashboard and API
+      - "14551:14551/udp"    # MAVLink forwarded by QGroundControl / Mission Planner
+    volumes:
+      - ./pharos-data:/data  # maps and uploaded videos survive restarts
+    environment:
+      PHAROS_MEDIAMTX_HOST: mediamtx
+      PHAROS_IN_DOCKER: "1"
+    depends_on: [mediamtx]
+    restart: unless-stopped
+
+  # Receives streams pushed from a drone controller, OBS or a ground station.
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    ports:
+      - "1935:1935"          # RTMP  (DJI Fly / DJI Pilot "Live streaming", OBS)
+      - "8554:8554"          # RTSP
+      - "8890:8890/udp"      # SRT
+    restart: unless-stopped

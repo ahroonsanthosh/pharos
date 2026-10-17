@@ -1,4 +1,4 @@
-"""Command line: ``pharos simulate | localize | bench``."""
+"""Command line: ``pharos simulate | localize | bench | serve``."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pharos.geomap import GeoMap
 from pharos.nav.localizer import LocalizerConfig
 from pharos.recording import load_recording, save_recording
 from pharos.sim.flight import simulate
-from pharos.sim.scenario import Scenario
+from pharos.sim.scenario import builtin_scenarios, load_scenario
 from pharos.types import Estimate
 
 
@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("simulate", help="render a scenario to a map and a flight recording")
-    p.add_argument("scenario", type=Path)
+    p.add_argument("scenario", help="built-in scenario name or YAML path")
     p.add_argument("-o", "--out", type=Path, required=True)
     p.set_defaults(func=_simulate)
 
@@ -38,18 +38,25 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=_localize)
 
     p = sub.add_parser("bench", help="simulate and localize scenarios, print a results table")
-    p.add_argument("scenarios", type=Path, nargs="+")
+    p.add_argument("scenarios", nargs="*", help="names or YAML paths (default: all built-in)")
     p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("-o", "--out", type=Path, help="write metrics and track images here")
     p.add_argument("-j", "--jobs", type=int, default=1, help="scenarios to run in parallel")
     p.set_defaults(func=_bench)
+
+    p = sub.add_parser("serve", help="live service: ingest feeds, dashboard at http://HOST:PORT")
+    p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to accept other devices")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--data", type=Path, default=Path("pharos-data"), help="maps and uploads")
+    p.add_argument("--open", action="store_true", help="open the dashboard in a browser")
+    p.set_defaults(func=_serve)
 
     args = parser.parse_args(argv)
     args.func(args)
 
 
 def _simulate(args) -> None:
-    geomap, rec = simulate(load_yaml(Scenario, args.scenario))
+    geomap, rec = simulate(load_scenario(args.scenario))
     geomap.save(args.out / "map")
     save_recording(rec, args.out / "recording")
     print(f"wrote {args.out / 'map.json'} and {len(rec)} frames to {args.out / 'recording'}")
@@ -72,7 +79,7 @@ def _localize(args) -> None:
 
 
 def _bench(args) -> None:
-    scenarios = [load_yaml(Scenario, path) for path in args.scenarios]
+    scenarios = [load_scenario(s) for s in args.scenarios or builtin_scenarios()]
     lines = [table_header()]
     print(lines[0], flush=True)
     metrics = {}
@@ -86,6 +93,21 @@ def _bench(args) -> None:
     if args.out:
         (args.out / "results.md").write_text("\n".join(lines) + "\n")
         (args.out / "results.json").write_text(json.dumps(metrics, indent=2))
+
+
+def _serve(args) -> None:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from pharos.server.app import create_app
+
+    if args.open:
+        host = "localhost" if args.host in ("0.0.0.0", "127.0.0.1") else args.host
+        url = f"http://{host}:{args.port}"
+        threading.Timer(1.5, webbrowser.open, [url]).start()
+    uvicorn.run(create_app(args.data), host=args.host, port=args.port)
 
 
 def _config(path: Path | None) -> LocalizerConfig:

@@ -73,3 +73,14 @@ def test_geotiff_in_utm(tmp_path):
     np.testing.assert_allclose(gm.px_to_world([0, 0]), [500000.25, 5199999.75])
     lat, lon = gm.to_latlon(500000.0, 5200000.0)
     assert np.isclose(lon, 9.0, atol=1e-6) and 46.9 < lat < 47.0  # UTM 32N central meridian
+
+
+def test_latlon_inverse_and_resampling():
+    gm = make_map()
+    x, y = gm.from_latlon(*gm.to_latlon(123.0, 456.0))
+    assert np.isclose(x, 123.0) and np.isclose(y, 456.0)
+    coarse = gm.resampled(5.0)
+    assert coarse.gsd == 5.0 and coarse.shape == (25, 32)
+    # pixel centres of the coarse map land on the same world points
+    np.testing.assert_allclose(coarse.px_to_world([0, 0]), gm.px_to_world([0.75, 0.75]))
+    assert gm.resampled(1.0) is gm

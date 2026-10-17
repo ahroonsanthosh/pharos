@@ -89,6 +89,33 @@ class GeoMap:
         lon = lon0 + np.degrees(x / (EARTH_RADIUS_M * np.cos(np.radians(lat0))))
         return float(lat), float(lon)
 
+    def from_latlon(self, lat: float, lon: float) -> tuple[float, float] | None:
+        """World coordinates of a WGS84 position (inverse of :meth:`to_latlon`)."""
+        if self.crs is not None:
+            x, y = _to_wgs84(self.crs).transform(lon, lat, direction="INVERSE")
+            return float(x), float(y)
+        if self.geo_origin is None:
+            return None
+        lat0, lon0 = self.geo_origin
+        y = np.radians(lat - lat0) * EARTH_RADIUS_M
+        x = np.radians(lon - lon0) * EARTH_RADIUS_M * np.cos(np.radians(lat0))
+        return float(x), float(y)
+
+    def resampled(self, gsd: float) -> GeoMap:
+        """The same map at a coarser ground sample distance (anti-aliased)."""
+        f = gsd / self.gsd
+        if f <= 1.0:
+            return self
+        h, w = self.shape
+        size = (int(w / f), int(h / f))
+        # Destination pixel u samples source u * f + (f - 1) / 2, the centre of its footprint.
+        M = np.array([[f, 0.0, (f - 1) / 2], [0.0, f, (f - 1) / 2]])
+        blurred = cv2.GaussianBlur(self.image, (0, 0), 0.5 * f)
+        image = cv2.warpAffine(blurred, M, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
+        half = (f - 1) / 2 * self.gsd
+        return GeoMap(image, gsd, self.origin_x + half, self.origin_y - half, self.geo_origin,
+                      self.crs)  # fmt: skip
+
     def save(self, path: str | Path) -> None:
         """Write ``<path>.png`` and a ``<path>.json`` georeference sidecar."""
         path = Path(path).with_suffix("")

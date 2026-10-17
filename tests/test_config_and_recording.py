@@ -1,16 +1,12 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-from pharos.config import from_dict, load_yaml
+from pharos.config import from_dict
 from pharos.geometry import Camera
 from pharos.nav.localizer import LocalizerConfig
 from pharos.recording import Recording, load_recording, save_recording
-from pharos.sim.scenario import Scenario
+from pharos.sim.scenario import Scenario, builtin_scenarios, load_scenario
 from pharos.types import Frame, GroundTruth, Telemetry
-
-SCENARIOS = sorted((Path(__file__).parents[1] / "configs" / "scenarios").glob("*.yaml"))
 
 
 def test_nested_config_and_tuples():
@@ -26,9 +22,14 @@ def test_unknown_keys_are_rejected():
         from_dict(Scenario, {"wrold": {}})
 
 
-@pytest.mark.parametrize("path", SCENARIOS, ids=lambda p: p.stem)
-def test_scenarios_load(path):
-    assert load_yaml(Scenario, path).name == path.stem
+@pytest.mark.parametrize("name", builtin_scenarios())
+def test_builtin_scenarios_load(name):
+    assert load_scenario(name).name == name
+
+
+def test_unknown_scenario_lists_builtins():
+    with pytest.raises(ValueError, match="nominal"):
+        load_scenario("atlantis")
 
 
 def test_recording_round_trip(tmp_path):

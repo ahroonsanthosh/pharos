@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pharos</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Pharos</h1>
+    <span class="tagline">visual position from any drone feed</span>
+    <a href="/api/docs" target="_blank" rel="noopener">API</a>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <section>
+        <div class="section-head">
+          <h2>Feeds</h2>
+          <button id="new-feed-btn" class="primary">New feed</button>
+        </div>
+        <ul id="feed-list" class="feed-list"></ul>
+        <p id="no-feeds" class="hint">No feeds yet. Start with the demo flight to see it work.</p>
+      </section>
+
+      <form id="feed-form" class="card" hidden>
+        <h2>New feed</h2>
+
+        <label>Source
+          <select name="kind">
+            <option value="demo">Demo flight (simulated)</option>
+            <option value="push">Stream pushed to this laptop (DJI, OBS, ground station)</option>
+            <option value="url">Stream URL (RTSP, RTMP, HLS, UDP)</option>
+            <option value="browser">Camera or capture card (through this browser)</option>
+            <option value="device">Camera or capture card (direct, without Docker)</option>
+            <option value="file">Recorded video</option>
+          </select>
+        </label>
+
+        <div data-kind="demo">
+          <label>Scenario <select name="scenario"></select></label>
+          <p class="hint">Renders a simulated flight with its own map. Takes about 15 s to start.</p>
+        </div>
+
+        <div data-kind="push">
+          <label>Stream name <input name="push_path" value="drone" pattern="[A-Za-z0-9_\-]+"></label>
+          <div class="hint">Point the drone or ground station at one of:
+            <ul id="push-urls" class="urls"></ul>
+            Requires the Docker setup (or MediaMTX running alongside).
+          </div>
+        </div>
+
+        <div data-kind="url">
+          <label>URL <input name="url" placeholder="rtsp://192.168.1.20:8554/live"></label>
+        </div>
+
+        <div data-kind="browser">
+          <label>Camera <select name="camera"></select></label>
+          <p class="hint">HDMI capture cards show up here as cameras.</p>
+        </div>
+
+        <div data-kind="device">
+          <label>Device index <input name="device" type="number" min="0" value="0"></label>
+        </div>
+
+        <div data-kind="file">
+          <label>Video <input name="video" type="file" accept="video/*,.mp4,.mov,.mkv"></label>
+          <label>DJI subtitle file (.SRT), optional <input name="srt" type="file" accept=".srt,.SRT"></label>
+        </div>
+
+        <div data-not-kind="demo">
+          <label>Map
+            <select name="map"></select>
+          </label>
+          <details>
+            <summary>Upload a map</summary>
+            <label>Name <input name="map_name" placeholder="my-area"></label>
+            <label>GeoTIFF <input name="map_file" type="file" accept=".tif,.tiff"></label>
+            <button type="button" id="upload-map-btn">Upload</button>
+            <p class="hint">North-up orthophoto in a metric CRS (UTM). Free sources: see docs/data.md.</p>
+          </details>
+
+          <div class="row">
+            <label>Horizontal FOV (°) <input name="hfov_deg" type="number" step="0.1" value="70"></label>
+            <label>Rate (Hz) <input name="rate_hz" type="number" step="0.5" min="0.5" value="2"></label>
+          </div>
+
+          <label>Telemetry
+            <select name="telemetry">
+              <option value="manual">Manual (enter height)</option>
+              <option value="mavlink">MAVLink over UDP (ArduPilot / PX4)</option>
+              <option value="srt">DJI .SRT file (recorded video)</option>
+            </select>
+          </label>
+          <div data-telemetry="manual" class="row">
+            <label>Height above ground (m) <input name="altitude_m" type="number" value="100"></label>
+            <label>Camera tilt (°) <input name="tilt_deg" type="number" value="0"></label>
+          </div>
+          <div data-telemetry="mavlink">
+            <div class="row">
+              <label>UDP port <input name="mavlink_port" type="number" value="14551"></label>
+              <label>Camera mount
+                <select name="mount"><option value="gimbal">Gimbal</option><option value="fixed">Fixed</option></select>
+              </label>
+            </div>
+            <label>Video delay (s) <input name="video_delay_s" type="number" step="0.1" min="0" value="0"></label>
+            <p class="hint">Stream latency, typically 0.5 to 1.5 s. Calibrate once on a flight with GPS: pick the value that minimizes "Error vs GNSS".</p>
+          </div>
+        </div>
+
+        <label>Name (optional) <input name="name"></label>
+        <div class="actions">
+          <button type="button" id="cancel-btn">Cancel</button>
+          <button type="submit" class="primary">Start</button>
+        </div>
+        <p id="form-error" class="error" hidden></p>
+      </form>
+    </aside>
+
+    <section id="map-panel">
+      <canvas id="map"></canvas>
+      <div class="legend">
+        <span><i class="dot tracking"></i>tracking</span>
+        <span><i class="dot converging"></i>converging</span>
+        <span><i class="line gnss"></i>aircraft GNSS</span>
+        <label><input type="checkbox" id="follow" checked> follow</label>
+      </div>
+      <p id="map-empty" class="map-empty">Select or start a feed.</p>
+    </section>
+
+    <aside id="details">
+      <div class="preview"><img id="preview" alt=""><span id="preview-empty">no frame yet</span></div>
+      <div id="status" class="status lost">no feed</div>
+      <dl id="readout" class="readout"></dl>
+      <div id="manual-controls" class="card" hidden>
+        <h2>Manual telemetry</h2>
+        <div class="row">
+          <label>Height (m) <input id="manual-alt" type="number"></label>
+          <label>Tilt (°) <input id="manual-tilt" type="number"></label>
+        </div>
+        <button id="manual-apply">Apply</button>
+      </div>
+      <button id="delete-feed" class="danger" hidden>Stop and remove feed</button>
+    </aside>
+  </main>
+
+  <video id="camera-video" playsinline muted hidden></video>
+  <script src="/static/app.js"></script>
+</body>
+</html>
