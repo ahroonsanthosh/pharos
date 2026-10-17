@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -116,6 +117,12 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
     p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
+    p.add_argument(
+        "--map-accuracy",
+        type=float,
+        default=0.0,
+        help="the map's own position error, m (e.g. 6 for NAIP), added to reported sigmas",
+    )
 
 
 def _load_footage_and_map(args):
@@ -145,7 +152,8 @@ def _analyze(args) -> None:
         err = f"  error vs GNSS {rec['error_m']:.0f} m" if "error_m" in rec else ""
         print(f"\r{i}/{n} {rec['status']:<10}{err}      ", end="", flush=True)
 
-    records = analyze(footage, geomap, _config(args.config), progress, smooth=not args.causal)
+    cfg = _with_map_accuracy(_config(args.config), args.map_accuracy)
+    records = analyze(footage, geomap, cfg, progress, smooth=not args.causal)
     print()
     summary = write_outputs(records, geomap, args.out, args.footage.name)
     print(json.dumps(summary, indent=2))
@@ -241,6 +249,12 @@ def _serve(args) -> None:
 
 def _config(path: Path | None) -> LocalizerConfig:
     return load_yaml(LocalizerConfig, path) if path else LocalizerConfig()
+
+
+def _with_map_accuracy(cfg: LocalizerConfig, accuracy_m: float) -> LocalizerConfig:
+    """A map that is itself off by metres makes every match off alike: systematic error."""
+    systematic = math.hypot(cfg.window.systematic_sigma_m, accuracy_m)
+    return replace(cfg, window=replace(cfg.window, systematic_sigma_m=systematic))
 
 
 def _estimate_json(e: Estimate, geomap: GeoMap) -> dict:

@@ -40,7 +40,8 @@ from pharos.vision.odometry import Motion
 
 @dataclass(frozen=True)
 class WindowConfig:
-    span_s: float = 40.0  # frames older than this leave the window (as a prior)
+    span_s: float = 40.0  # frames older than this leave the window (as a prior)...
+    min_frames: int = 20  # ...but it always keeps this many (photo sets: seconds apart)
     gyro_sigma_deg: float = 1.5  # error of the reported heading change between frames
     accel_sigma: float = 2.0  # m/s^2 of body-frame velocity change (manoeuvres, wind in turns)
     compass_sigma_deg: float = 20.0  # absolute heading around reported yaw + learned offset
@@ -52,6 +53,9 @@ class WindowConfig:
     # terrain under an oblique view is further from the assumed height than under nadir.
     scale_walk: float = 0.01
     scale_tilt: float = 4.0
+    # Heading increments (gyro and odometry) loosen the same way: in a bank the camera's
+    # heading comes from composing timing-sensitive roll, pitch and mount angles.
+    heading_tilt: float = 2.0
     match_sigma_m: float = 3.0
     match_heading_sigma_deg: float = 2.0
     outlier_sigma_m: float = 60.0  # a match on a look-alike lands somewhere around
@@ -143,8 +147,8 @@ class PoseWindow:
 
     def trim(self) -> None:
         """Drop frames older than the span; their information stays as a prior on the oldest."""
-        cut = 0
-        while cut < len(self.nodes) - 1 and self.nodes[-1].t - self.nodes[cut].t > self.cfg.span_s:
+        cut, most = 0, len(self.nodes) - max(self.cfg.min_frames, 1)
+        while cut < most and self.nodes[-1].t - self.nodes[cut].t > self.cfg.span_s:
             cut += 1
         if not cut:
             return
@@ -178,12 +182,14 @@ class PoseWindow:
         A = np.linalg.solve(Hdd + _DAMPING * np.eye(dropped), Hdm)
         info = Hmm - Hdm.T @ A
         grad = g[dropped:] - A.T @ g[:dropped]
-        info = 0.5 * (info + info.T) + _DAMPING * np.eye(5)
-        mean = x[kept] - np.linalg.solve(info, grad)
+        # Rounding can leave an unobserved direction slightly negative: clip, do not invert it.
+        ev, vec = np.linalg.eigh(0.5 * (info + info.T))
+        ev = np.maximum(ev, _MIN_INFORMATION)
+        mean = x[kept] - vec @ ((vec.T @ grad) / ev)
         mean[2], mean[4] = wrap_angle(mean[2]), wrap_angle(mean[4])
         walk = np.zeros((5, 5))  # the compass offset drifts a little over time
         walk[4, 4] = math.radians(self.cfg.compass_walk_deg) ** 2
-        cov = np.linalg.inv(info) * self.cfg.marginal_inflation + walk
+        cov = (vec / ev) @ vec.T * self.cfg.marginal_inflation + walk
         return mean, _whitener(cov)
 
     # -- solving ----------------------------------------------------------
@@ -306,7 +312,9 @@ class PoseWindow:
             m = [nodes[i].motion for i in k]
             d = np.array([mo.d_body for mo in m])
             s = cfg.odometry_gain * np.array([mo.sigma_m for mo in m])
+            oblique_k = np.sin(np.maximum(tilt[k], tilt[k - 1]))
             sh = cfg.odometry_gain * np.array([mo.sigma_heading for mo in m])
+            sh = sh * (1 + cfg.heading_tilt * oblique_k)
             dh = np.array([mo.d_heading for mo in m])
             Rt, dRt = _rt(F[k - 1, 2])
             delta = F[k, :2] - F[k - 1, :2]
@@ -344,10 +352,11 @@ class PoseWindow:
         # gyro: the reported heading change between frames
         k = np.flatnonzero(np.isfinite(yaw[1:]) & np.isfinite(yaw[:-1])) + 1
         if len(k):
-            sg = math.radians(cfg.gyro_sigma_deg)
+            oblique = np.sin(np.maximum(tilt[k], tilt[k - 1]))
+            sg = math.radians(cfg.gyro_sigma_deg) * (1 + cfg.heading_tilt * oblique)
             turn = wrap_angle(yaw[k] - yaw[k - 1])
             res = wrap_angle(F[k, 2] - F[k - 1, 2] - turn) / sg
-            J = np.tile([-1 / sg, 1 / sg], (len(k), 1))[:, None, :]
+            J = np.stack([-1 / sg, 1 / sg], 1)[:, None, :]
             b.block(res[:, None], np.stack([col[k - 1] + 2, col[k] + 2], 1), J)
 
         # motion: body-frame velocity changes slowly
@@ -403,6 +412,7 @@ class PoseWindow:
 # -- helpers -----------------------------------------------------------------
 
 _DAMPING = 1e-9
+_MIN_INFORMATION = 1e-8  # 1/unit^2: e.g. a 10 km position sigma
 
 
 def _eye(n: int):
@@ -430,9 +440,10 @@ def _cauchy(d, c: float):
 
 
 def _whitener(cov: np.ndarray) -> np.ndarray:
-    """W with W.T @ W = inv(cov)."""
-    L = np.linalg.cholesky(np.linalg.inv(cov))
-    return L.T
+    """W with W.T @ W = inv(cov), robust to a nearly singular ``cov``."""
+    ev, vec = np.linalg.eigh(0.5 * (cov + cov.T))
+    ev = np.maximum(ev, 1e-12 * max(float(ev.max()), 1e-12))
+    return (vec / np.sqrt(ev)).T
 
 
 class _Builder:

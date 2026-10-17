@@ -45,8 +45,11 @@ class LocalizerConfig:
     min_altitude_m: float = 15.0
     max_tilt_deg: float = 60.0
     # Beyond this tilt only odometry runs. On a real fixed-wing, half the confident matches
-    # in banked turns were 20+ m off (lens distortion, attitude timing) against 9% near nadir.
+    # above 20 degrees of bank were 20+ m off, all of them while rolling fast, against 9%
+    # near nadir. A camera held steadily oblique (a gimbal) still matches up to the limit.
     max_match_tilt_deg: float = 30.0
+    max_match_tilt_rolling_deg: float = 20.0  # the limit while the tilt is changing...
+    rolling_deg_s: float = 5.0  # ...faster than this
     # Acquisition
     prior_center: tuple[float, float] | None = None  # e.g. last GNSS fix before denial
     prior_radius_m: float = float("inf")
@@ -70,7 +73,8 @@ class LocalizerConfig:
     track_min_excess: float = 1.5  # a match must stand out from its window's noise
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
     # A confirmed track keeps searching around its prediction (reported as coasting) while
-    # the window that needs stays within max_search_m, for up to max_coast_s.
+    # the window that needs stays within max_search_m, for up to max_coast_s. Longer coasts
+    # with wider searches were tried on real flights: they accept more look-alikes.
     max_coast_s: float = 30.0
     trust_sigma_m: float = 10.0  # beyond this uncertainty a track is reported as coasting
     # A position is trusted only with this many independent inlier matches in the window
@@ -169,7 +173,7 @@ class Localizer:
         start = time.perf_counter()
         fix = None
         usable = usable_view(frame.telemetry, self.cfg)
-        matchable = matchable_view(frame.telemetry, self.cfg)
+        matchable = matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame)
         self._motion = None
         if self.odometry is not None:
             if usable:
@@ -449,7 +453,7 @@ class Localizer:
 
         Frames before the first confirmation keep their causal estimates. A frame is
         trusted with a small smoothed uncertainty and enough independent inlier matches
-        within half a window span of it.
+        within half a window (span or frame count) of it.
         """
         cfg, log = self.cfg, self.log
         estimates = [e["estimate"] for e in log]
@@ -480,9 +484,10 @@ class Localizer:
         flown = np.concatenate([[0.0], np.cumsum(steps)])
         t = np.array([nd.t for nd in w.nodes])
         inlier = np.array([nd.fix is not None and nd.inlier for nd in w.nodes])
-        half = cfg.window.span_s / 2
+        half, frames = cfg.window.span_s / 2, cfg.window.min_frames // 2
+        index = np.arange(len(w.nodes))
         for k, nd in enumerate(w.nodes):
-            near = flown[inlier & (np.abs(t - nd.t) <= half)]
+            near = flown[inlier & ((np.abs(t - nd.t) <= half) | (np.abs(index - k) <= frames))]
             sigma = w.sigma(k)
             trusted = (
                 sigma <= cfg.trust_sigma_m
@@ -502,6 +507,15 @@ class Localizer:
         return estimates
 
     # -- helpers ----------------------------------------------------------
+
+    def _rolling(self, frame: Frame) -> bool:
+        """Tilted beyond the rolling limit while the tilt changes fast (entering a bank)."""
+        tel, cfg = frame.telemetry, self.cfg
+        last = self.log[-1]["tel"] if self.log else None
+        if last is None or tel.tilt <= np.radians(cfg.max_match_tilt_rolling_deg):
+            return False
+        dt = frame.t - self.log[-1]["t"]
+        return dt <= 0 or abs(tel.tilt - last.tilt) / dt > np.radians(cfg.rolling_deg_s)
 
     def _plausible(self, m: Motion | None, t: float) -> Motion | None:
         """Odometry, unless it implies an impossible speed (RANSAC on a wrong cluster)."""
@@ -560,10 +574,8 @@ class Localizer:
         if self.status is Status.TRACKING and self.window is not None:
             w, cfg = self.window, self.cfg
             sigma = w.sigma()
-            trusted = (
-                sigma <= cfg.trust_sigma_m
-                and w.support(cfg.reconfirm_distance_m) >= cfg.trust_support
-            )
+            support = w.support(cfg.reconfirm_distance_m)
+            trusted = sigma <= cfg.trust_sigma_m and support >= cfg.trust_support
             x, y, heading = w.pose
             status = Status.TRACKING if trusted else Status.COASTING
             return Estimate(t, status, float(x), float(y), float(heading), sigma, fix, latency_ms)

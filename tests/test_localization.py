@@ -65,7 +65,8 @@ def test_track_survives_a_blackout_without_false_fixes(small_sim):
     assert all(e.status is not Status.TRACKING or e.sigma_xy <= 15 for e in estimates[24:36])
     assert any(e.status is Status.COASTING for e in estimates[24:36])
     recovered = [i for i in range(36, len(estimates)) if estimates[i].status is Status.TRACKING]
-    assert recovered and recovered[0] <= 36 + 6
+    # trusted again after two fresh matches 40 m of flight apart (12 m/s, 2 frames/s)
+    assert recovered and recovered[0] <= 36 + 9
 
 
 def test_frames_on_the_ground_or_facing_the_horizon_are_skipped(small_sim):

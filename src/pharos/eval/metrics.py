@@ -22,9 +22,17 @@ WRONG_M = 25.0  # a TRACKING estimate further off than this counts as confidentl
 
 
 def integrity(
-    t: np.ndarray, err: np.ndarray, trusted: np.ndarray, sigma: np.ndarray | None = None
+    t: np.ndarray,
+    err: np.ndarray,
+    trusted: np.ndarray,
+    sigma: np.ndarray | None = None,
+    located: np.ndarray | None = None,
 ) -> dict[str, float]:
-    """Coverage, misleading rate, sigma calibration and the longest untrusted gap."""
+    """Coverage, misleading rate, sigma calibration and the longest untrusted gap.
+
+    ``located`` marks frames with any position (trusted or coasting): with an honest
+    sigma, a coasting position is still a usable one.
+    """
     n = len(t)
     out = {
         "coverage_25m": float(np.mean(trusted & (err <= WRONG_M))) if n else 0.0,
@@ -33,6 +41,10 @@ def integrity(
     }
     if sigma is not None and trusted.any():
         out["within_3_sigma"] = float(np.mean(err[trusted] <= 3 * sigma[trusted]))
+    if located is not None and n:
+        out["located_25m"] = float(np.mean(located & (err <= WRONG_M)))
+        if sigma is not None and located.any():
+            out["located_within_3_sigma"] = float(np.mean(err[located] <= 3 * sigma[located]))
     return out
 
 
@@ -71,5 +83,9 @@ def evaluate(estimates: Sequence[Estimate], truth: Sequence[GroundTruth]) -> dic
         "confident_wrong": float(np.mean(err[trk] > WRONG_M)) if trk.any() else 0.0,
         "latency_median_ms": stat(np.median, latency),
     } | integrity(
-        np.array([g.t for g in truth]), err, trk, np.array([e.sigma_xy for e in estimates])
+        np.array([g.t for g in truth]),
+        err,
+        trk,
+        np.array([e.sigma_xy for e in estimates]),
+        np.array([e.status is not Status.LOST and np.isfinite(e.x) for e in estimates]),
     )

@@ -83,7 +83,8 @@ def _summarize(records: list[dict]) -> dict:
         trusted = np.array([r["status"] == Status.TRACKING.value for r in scored])
         sigma = np.array([r.get("sigma_m", np.inf) for r in scored])
         err = np.array([r.get("error_m", np.inf) for r in scored])
-        out |= integrity(np.array([r["t"] for r in scored]), err, trusted, sigma)
+        located = np.array([r["status"] != Status.LOST.value and "x" in r for r in scored])
+        out |= integrity(np.array([r["t"] for r in scored]), err, trusted, sigma, located)
     return out
 
 
