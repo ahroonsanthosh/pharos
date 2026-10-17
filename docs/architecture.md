@@ -155,7 +155,12 @@ details was a bug before it was a rule: loosened per frame, or kept on one
 frame, the prior forgot within a minute where a track without matches was.
 Likewise, velocity changes over steps that odometry measured are judged in
 odometry units: in metres, shrinking every step shrinks the accelerations
-that odometry noise implies, and without matches the scale collapsed.
+that odometry noise implies, and without matches the scale collapsed. And
+the scale is held loosely near 1 (lens, field of view and height errors are
+tens of percent) and kept between 0.5 and 2: with nothing else to hold it,
+minutes of dead reckoning let it wander through zero. With these, six
+minutes of dead reckoning on either real flight stays within three sigmas
+from every starting point tried.
 
 **Trust.** A position is reported as `tracking` only when its uncertainty
 is at most 10 m and at least two independent inlier matches (40 m of flight

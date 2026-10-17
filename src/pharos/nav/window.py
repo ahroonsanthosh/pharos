@@ -53,6 +53,11 @@ class WindowConfig:
     # terrain under an oblique view is further from the assumed height than under nadir.
     scale_walk: float = 0.01
     scale_tilt: float = 4.0
+    # Lens, field of view and height errors put the scale within tens of percent of 1.
+    # Without matches nothing else holds it: one loose prior on the newest frame's scale
+    # keeps minutes of dead reckoning from wandering off (never marginalized, so it does not
+    # accumulate).
+    scale_bound: float = 0.3
     # Heading increments (gyro and odometry) loosen the same way: in a bank the camera's
     # heading comes from composing timing-sensitive roll, pitch and mount angles.
     heading_tilt: float = 2.0
@@ -218,6 +223,9 @@ class PoseWindow:
             step = splu(H + _DAMPING * _eye(H.shape[0])).solve(-(J.T @ r))
             x += step
             x[2 : _V * n : _V] = wrap_angle(x[2 : _V * n : _V])
+            # A full Gauss-Newton step can overshoot through zero scale, where odometry
+            # inverts; beyond a factor of two odometry has failed rather than mis-scaled.
+            x[3 : _V * n : _V] = np.clip(x[3 : _V * n : _V], *_SCALE_LIMITS)
             if np.max(np.abs(step[: _V * n])) < 1e-3:
                 break
         for k, nd in enumerate(self.nodes):
@@ -255,6 +263,8 @@ class PoseWindow:
     def sigma(self, k: int = -1) -> float:
         """Position uncertainty of frame ``k`` (largest axis, systematic part included), metres."""
         solved = float(np.linalg.eigvalsh(self.covs[k][:2, :2]).max())
+        if not solved >= 0.0:  # NaN, or a broken covariance: nothing is known
+            return math.inf
         return math.sqrt(solved + self.cfg.systematic_sigma_m**2)
 
     def heading_sigma(self, k: int = -1) -> float:
@@ -355,6 +365,12 @@ class PoseWindow:
             w = _cauchy(np.abs(res_h), cfg.odometry_robust)
             b.block(res_h[:, None], np.stack([j + 2, i + 2], 1), Jh, w)
 
+        b.block(
+            np.array([(F[-1, 3] - 1.0) / cfg.scale_bound]),
+            np.array([col[-1] + 3]),
+            np.array([[1.0 / cfg.scale_bound]]),
+        )
+
         if n >= 2:
             # odometry scale: a random walk, looser when the camera looks obliquely
             k = np.arange(1, n)
@@ -436,6 +452,7 @@ class PoseWindow:
 # -- helpers -----------------------------------------------------------------
 
 _DAMPING = 1e-9
+_SCALE_LIMITS = (0.5, 2.0)
 _MIN_INFORMATION = 1e-8  # 1/unit^2: e.g. a 10 km position sigma
 
 
