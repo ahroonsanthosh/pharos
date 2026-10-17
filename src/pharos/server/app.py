@@ -17,12 +17,18 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pharos.config import from_dict
+from pharos.eval.export import to_csv, to_geojson, to_kml
 from pharos.server.feeds import Feed, FeedSpec
 from pharos.server.store import MapStore, safe_name
-from pharos.server.telemetry import ManualTelemetry
 from pharos.sim.scenario import builtin_scenarios
+from pharos.telemetry import ManualTelemetry
 
 STATIC = Path(__file__).parent / "static"
+_EXPORTS = {
+    "geojson": (to_geojson, "application/geo+json"),
+    "kml": (to_kml, "application/vnd.google-earth.kml+xml"),
+    "csv": (to_csv, "text/csv"),
+}
 
 
 def create_app(data_dir: str | Path) -> FastAPI:
@@ -89,9 +95,29 @@ def create_app(data_dir: str | Path) -> FastAPI:
         return builtin_scenarios()
 
     @app.post("/api/uploads")
-    def upload_file(file: UploadFile) -> dict:
-        """Store a video or SRT file; returns the server path to use in a feed."""
-        return {"path": str(_save_upload(file, uploads))}
+    def upload_files(files: list[UploadFile]) -> dict:
+        """Store a video, an SRT file, or a set of photos (kept together in a new folder).
+
+        Returns the server path to use as a feed source or telemetry file.
+        """
+        if len(files) == 1:
+            return {"path": str(_save_upload(files[0], uploads))}
+        folder = Path(tempfile.mkdtemp(prefix="photos-", dir=uploads))
+        for f in files:
+            _save_upload(f, folder)
+        return {"path": str(folder)}
+
+    @app.get("/api/feeds/{feed_id}/export.{fmt}")
+    def export_track(feed_id: str, fmt: str) -> Response:
+        """Download the feed's track as GeoJSON, KML (Google Earth) or CSV."""
+        feed = get_feed(feed_id)
+        name = safe_name(feed.spec.name or feed.id)
+        if fmt not in _EXPORTS:
+            raise HTTPException(404, f"unknown format {fmt}; use geojson, kml or csv")
+        render, media_type = _EXPORTS[fmt]
+        body = render(list(feed.records)) if fmt == "csv" else render(list(feed.records), name)
+        headers = {"content-disposition": f'attachment; filename="{name}.{fmt}"'}
+        return Response(body, media_type=media_type, headers=headers)
 
     # -- feeds ------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Telemetry sources that pair with a live or recorded video feed.
+"""Telemetry that pairs with live or recorded footage: manual, DJI, MAVLink.
 
 Every source answers "what did the aircraft report at time t?" with the
 localizer's :class:`~pharos.types.Telemetry` (height above ground, camera

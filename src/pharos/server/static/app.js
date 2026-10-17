@@ -56,6 +56,8 @@ function selectFeed(id) {
   state.records = [];
   state.map = null;
   $("#delete-feed").hidden = !id;
+  $("#exports").hidden = !id;
+  for (const a of document.querySelectorAll("#exports a")) a.href = id ? `/api/feeds/${id}/export.${a.dataset.fmt}` : "";
   $("#preview").removeAttribute("src");
   refreshFeeds();
   pollRecords();
@@ -279,9 +281,9 @@ async function listCameras() {
   }
 }
 
-async function upload(file) {
+async function upload(files) {
   const body = new FormData();
-  body.append("file", file);
+  for (const file of files) body.append("files", file);
   return (await api("/api/uploads", { method: "POST", body })).path;
 }
 
@@ -329,9 +331,9 @@ async function buildSpec() {
   if (kind === "browser") spec.source = "browser";
   if (kind === "device") spec.source = String(f.device.value);
   if (kind === "file") {
-    if (!f.video.files[0]) throw new Error("Choose a video file.");
-    spec.source = await upload(f.video.files[0]);
-    if (f.srt.files[0]) spec.telemetry = `srt:${await upload(f.srt.files[0])}`;
+    if (!f.video.files.length) throw new Error("Choose a video file or photos.");
+    spec.source = await upload(f.video.files);
+    if (f.srt.files[0]) spec.telemetry = `srt:${await upload(f.srt.files)}`;
   }
   if (spec.telemetry === "srt") throw new Error("Choose the .SRT file for DJI telemetry.");
   if (!spec.source) throw new Error("Enter a source.");

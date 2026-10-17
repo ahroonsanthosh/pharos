@@ -1,4 +1,4 @@
-"""Command line: ``pharos simulate | localize | bench | serve``."""
+"""Command line: ``pharos analyze | serve | simulate | localize | bench``."""
 
 from __future__ import annotations
 
@@ -9,10 +9,12 @@ from pathlib import Path
 
 import cv2
 
+from pharos.analyze import analyze, write_outputs
 from pharos.config import load_yaml
 from pharos.eval.bench import localize, run_scenarios, table_header, table_row
 from pharos.eval.metrics import evaluate
 from pharos.eval.plot import draw_track
+from pharos.footage import load_footage
 from pharos.geomap import GeoMap
 from pharos.nav.localizer import LocalizerConfig
 from pharos.recording import load_recording, save_recording
@@ -44,6 +46,21 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("-j", "--jobs", type=int, default=1, help="scenarios to run in parallel")
     p.set_defaults(func=_bench)
 
+    p = sub.add_parser("analyze", help="localize recorded footage and export the track")
+    p.add_argument("footage", type=Path, help="video file or folder of photos")
+    p.add_argument("--map", type=Path, required=True, help="GeoTIFF or map .json")
+    p.add_argument("--hfov", type=float, help="horizontal field of view, degrees")
+    p.add_argument("--altitude", type=float, help="height above ground, if the footage has none")
+    p.add_argument(
+        "--ground", type=float, help="ground height in the photos' GPS altitude reference"
+    )
+    p.add_argument("--srt", type=Path, help="DJI subtitle file (default: next to the video)")
+    p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
+    p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
+    p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
+    p.add_argument("-o", "--out", type=Path, required=True)
+    p.set_defaults(func=_analyze)
+
     p = sub.add_parser("serve", help="live service: ingest feeds, dashboard at http://HOST:PORT")
     p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to accept other devices")
     p.add_argument("--port", type=int, default=8000)
@@ -53,6 +70,28 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
     args.func(args)
+
+
+def _analyze(args) -> None:
+    footage = load_footage(
+        args.footage,
+        hfov_deg=args.hfov,
+        altitude_m=args.altitude,
+        ground_m=args.ground,
+        srt=args.srt,
+        rate_hz=args.rate,
+    )
+    geomap = GeoMap.open(args.map).resampled(args.map_gsd)
+
+    def progress(i: int, n: int, rec: dict) -> None:
+        err = f"  error vs GNSS {rec['error_m']:.0f} m" if "error_m" in rec else ""
+        print(f"\r{i}/{n} {rec['status']:<10}{err}      ", end="", flush=True)
+
+    records = analyze(footage, geomap, _config(args.config), progress)
+    print()
+    summary = write_outputs(records, geomap, args.out, args.footage.name)
+    print(json.dumps(summary, indent=2))
+    print(f"wrote {args.out}: track.geojson, track.kml, track.csv, overview.png")
 
 
 def _simulate(args) -> None:

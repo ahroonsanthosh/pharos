@@ -151,6 +151,13 @@ class GeoMap:
         )
 
     @classmethod
+    def open(cls, path: str | Path) -> GeoMap:
+        """A GeoTIFF or a ``.json`` sidecar written by :meth:`save`."""
+        if Path(path).suffix.lower() in (".tif", ".tiff"):
+            return cls.from_geotiff(path)
+        return cls.load(path)
+
+    @classmethod
     def from_geotiff(cls, path: str | Path) -> GeoMap:
         """Load a north-up orthophoto GeoTIFF in a projected CRS (needs ``pharos[geo]``).
 

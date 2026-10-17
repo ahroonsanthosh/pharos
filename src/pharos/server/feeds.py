@@ -8,6 +8,7 @@
                         (RTMP from a DJI controller or OBS, SRT/RTSP from a ground station)
 * ``rtsp://``, ``rtmp://``, ``udp://``, ``srt://``, ``http(s)://...m3u8``  live stream URLs
 * ``0``, ``1``, ...     a camera or capture card attached to this machine
+* a folder             photos with EXIF time/GPS (DJI and senseFly metadata understood)
 * anything else         a video file path (processed at ``rate_hz`` of video time)
 
 Live sources always hand over the newest frame and drop the rest, so a slow
@@ -28,20 +29,22 @@ from typing import Protocol
 import cv2
 import numpy as np
 
+from pharos.eval.export import record
+from pharos.footage import load_photos
 from pharos.geomap import GeoMap
 from pharos.geometry import Camera
 from pharos.nav.localizer import Localizer
 from pharos.server.store import MapStore
-from pharos.server.telemetry import (
+from pharos.sim.flight import simulate
+from pharos.sim.scenario import load_scenario
+from pharos.telemetry import (
     ManualTelemetry,
     MavlinkTelemetry,
     SrtTelemetry,
     TelemetrySample,
     TelemetrySource,
 )
-from pharos.sim.flight import simulate
-from pharos.sim.scenario import load_scenario
-from pharos.types import Estimate, Frame, Status
+from pharos.types import Frame
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +136,10 @@ class Feed:
             self.map_name, self.telemetry, self.camera = demo.map_name, demo, demo.camera
             return demo, self.store.get(demo.map_name)
         geomap = self.store.get(spec.map)
+        if Path(spec.source).is_dir():
+            photos = PhotoSource(Path(spec.source), spec)
+            self.telemetry, self.camera = photos, photos.camera
+            return photos, geomap
         self.telemetry = _open_telemetry(spec)
         if self.pushed is not None:
             return self.pushed, geomap
@@ -165,7 +172,7 @@ class Feed:
                 camera = self.camera or Camera.from_fov(w, h, self.spec.hfov_deg)
                 localizer = Localizer(geomap, camera)
             estimate = localizer.process(Frame(t, image, sample.telemetry))
-            self.records.append(_record(estimate, sample, geomap))
+            self.records.append(record(estimate, sample.telemetry, sample.gnss, geomap))
             preview = cv2.imencode(".jpg", _limit_width(image, PREVIEW_WIDTH))[1]
             self.preview = preview.tobytes()
 
@@ -287,6 +294,35 @@ class PushedFrames:
         pass
 
 
+class PhotoSource:
+    """A folder of photos, played as fast as possible with each photo's own metadata."""
+
+    live = False
+
+    def __init__(self, folder: Path, spec: FeedSpec):
+        try:
+            footage = load_photos(folder)
+        except ValueError:  # photos lack height or field of view: use the feed's settings
+            footage = load_photos(folder, hfov_deg=spec.hfov_deg, altitude_m=spec.altitude_m)
+        self.camera = footage.recording.camera
+        self.frames = iter(footage.recording)
+        self.gnss = footage.gnss
+        self.samples: dict[float, TelemetrySample] = {}
+
+    def read(self, timeout: float) -> tuple[float, np.ndarray]:
+        frame = next(self.frames, None)
+        if frame is None:
+            raise EOFError
+        self.samples[frame.t] = TelemetrySample(frame.telemetry, self.gnss[len(self.samples)])
+        return frame.t, frame.image
+
+    def at(self, t: float) -> TelemetrySample | None:
+        return self.samples.get(t)
+
+    def close(self) -> None:
+        pass
+
+
 class DemoSource:
     """A simulated flight, played back in real time with its telemetry and GNSS truth."""
 
@@ -340,30 +376,3 @@ def _limit_width(image: np.ndarray, width: int) -> np.ndarray:
     if w <= width:
         return image
     return cv2.resize(image, (width, round(h * width / w)), interpolation=cv2.INTER_AREA)
-
-
-def _record(e: Estimate, sample: TelemetrySample, geomap: GeoMap) -> dict:
-    tel = sample.telemetry
-    rec: dict = {
-        "t": round(e.t, 3),
-        "status": e.status.value,
-        "altitude_m": round(tel.altitude, 1),
-        "tilt_deg": round(math.degrees(tel.pitch), 1),
-        "latency_ms": round(e.latency_ms),
-    }
-    if e.status is not Status.LOST:
-        rec |= {
-            "x": e.x,
-            "y": e.y,
-            "heading_deg": round(math.degrees(e.heading) % 360, 1),
-            "sigma_m": round(e.sigma_xy, 1),
-        }
-        if (latlon := geomap.to_latlon(e.x, e.y)) is not None:
-            rec["lat"], rec["lon"] = latlon
-    if e.fix is not None:
-        rec["score"] = round(e.fix.score, 3)
-    if sample.gnss is not None and (xy := geomap.from_latlon(*sample.gnss)) is not None:
-        rec["gnss"] = {"lat": sample.gnss[0], "lon": sample.gnss[1], "x": xy[0], "y": xy[1]}
-        if "x" in rec:
-            rec["error_m"] = round(math.hypot(e.x - xy[0], e.y - xy[1]), 1)
-    return rec

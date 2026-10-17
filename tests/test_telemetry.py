@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from pharos.server.telemetry import MavlinkState, SrtTelemetry, parse_dji_srt
+from pharos.telemetry import MavlinkState, SrtTelemetry, parse_dji_srt
 
 MODERN_SRT = """1
 00:00:00,000 --> 00:00:00,033
@@ -105,7 +105,7 @@ def test_mavlink_over_udp():
     pytest.importorskip("pymavlink")
     from pymavlink import mavutil
 
-    from pharos.server.telemetry import MavlinkTelemetry
+    from pharos.telemetry import MavlinkTelemetry
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind(("127.0.0.1", 0))

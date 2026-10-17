@@ -61,6 +61,7 @@ class Status(StrEnum):
     LOST = "lost"  # no position; searching the whole region
     CONVERGING = "converging"  # initialized, not yet confirmed by enough frames
     TRACKING = "tracking"  # confirmed; estimate is trustworthy
+    COASTING = "coasting"  # confirmed earlier, but no recent match: dead reckoning only
 
 
 @dataclass(frozen=True)

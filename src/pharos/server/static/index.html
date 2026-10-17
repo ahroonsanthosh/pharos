@@ -34,7 +34,7 @@
             <option value="url">Stream URL (RTSP, RTMP, HLS, UDP)</option>
             <option value="browser">Camera or capture card (through this browser)</option>
             <option value="device">Camera or capture card (direct, without Docker)</option>
-            <option value="file">Recorded video</option>
+            <option value="file">Recorded video or photos</option>
           </select>
         </label>
 
@@ -65,8 +65,10 @@
         </div>
 
         <div data-kind="file">
-          <label>Video <input name="video" type="file" accept="video/*,.mp4,.mov,.mkv"></label>
+          <label>Video, or several photos <input name="video" type="file" multiple accept="video/*,image/*,.mp4,.mov,.mkv,.jpg,.jpeg"></label>
           <label>DJI subtitle file (.SRT), optional <input name="srt" type="file" accept=".srt,.SRT"></label>
+          <p class="hint">Recorded footage is processed as fast as this computer allows. Photos use their own
+            GPS, time and DJI / senseFly metadata; set the height below if the photos lack it.</p>
         </div>
 
         <div data-not-kind="demo">
@@ -122,7 +124,7 @@
       <canvas id="map"></canvas>
       <div class="legend">
         <span><i class="dot tracking"></i>tracking</span>
-        <span><i class="dot converging"></i>converging</span>
+        <span><i class="dot converging"></i>converging / coasting</span>
         <span><i class="line gnss"></i>aircraft GNSS</span>
         <label><input type="checkbox" id="follow" checked> follow</label>
       </div>
@@ -133,6 +135,8 @@
       <div class="preview"><img id="preview" alt=""><span id="preview-empty">no frame yet</span></div>
       <div id="status" class="status lost">no feed</div>
       <dl id="readout" class="readout"></dl>
+      <p id="exports" class="exports" hidden>Export track:
+        <a data-fmt="geojson">GeoJSON</a> · <a data-fmt="kml">KML</a> · <a data-fmt="csv">CSV</a></p>
       <div id="manual-controls" class="card" hidden>
         <h2>Manual telemetry</h2>
         <div class="row">

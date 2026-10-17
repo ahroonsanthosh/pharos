@@ -2,7 +2,7 @@
 
     LOST ──(global fixes)──▶ CONVERGING ──(one hypothesis wins)──▶ TRACKING
      ▲                          │                                    │
-     └──────(all rejected)──────┴──────────────(misses)──────────────┘
+     └──────(all rejected)──────┴───────(no match for too long)───────┘
 
 A wrong-but-confident position is worse than admitting the aircraft is lost.
 Consecutive frames overlap almost completely, so a look-alike place that fools
@@ -45,8 +45,9 @@ class LocalizerConfig:
     confirm_margin: float = 0.06  # mean-score lead over the runner-up
     # Tracking
     track_min_score: float = 0.18
-    max_misses_converging: int = 3
-    max_misses: int = 8
+    max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
+    max_coast_s: float = 8.0  # a confirmed track is dropped after this long without a match
+    trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
     meas_sigma_m: float = 3.0
     meas_heading_sigma_deg: float = 2.0
     search_sigmas: float = 3.0
@@ -61,8 +62,9 @@ class LocalizerConfig:
 class _Hypothesis:
     filter: PoseFilter
     scores: list[float] = field(default_factory=list)
-    misses: int = 0
-    travelled: float = 0.0
+    last_hit_t: float = 0.0
+    last_hit_xy: np.ndarray | None = None
+    travelled: float = 0.0  # distance between matched positions, not dead reckoning
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
 
     @property
@@ -105,12 +107,14 @@ class Localizer:
         else:
             fixes = [self._step(h, frame) for h in self.hypotheses]
             limit = (
-                self.cfg.max_misses
+                self.cfg.max_coast_s
                 if self.status is Status.TRACKING
-                else self.cfg.max_misses_converging
+                else self.cfg.max_coast_converging_s
             )
             alive = [
-                (h, f) for h, f in zip(self.hypotheses, fixes, strict=True) if h.misses < limit
+                (h, f)
+                for h, f in zip(self.hypotheses, fixes, strict=True)
+                if frame.t - h.last_hit_t <= limit
             ]
             self.hypotheses = [h for h, _ in alive]
             if self.status is Status.TRACKING and alive:
@@ -154,7 +158,8 @@ class Localizer:
                 pos_sigma=cfg.meas_sigma_m,
                 heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
             )
-            self.hypotheses.append(_Hypothesis(kf, [f.score], distinct=f.distinctiveness))
+            hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
+            self.hypotheses.append(hyp)
         if self.hypotheses and self.status is Status.LOST:
             self.status = Status.CONVERGING
             self._frames_in_state = 0
@@ -170,8 +175,9 @@ class Localizer:
         if not self.hypotheses:
             return
         best = max(self.hypotheses, key=lambda h: h.mean_score)
+        hits = sum(s > 0 for s in best.scores)
         if (
-            len(best.scores) < cfg.confirm_frames
+            hits < cfg.confirm_frames
             or best.travelled < cfg.confirm_distance_m
             or best.mean_score < cfg.init_min_score
             or best.distinct < cfg.init_min_distinctiveness
@@ -192,7 +198,6 @@ class Localizer:
         cfg, kf = self.cfg, h.filter
         dt = frame.t - self._last_t if self._last_t is not None else 0.0
         yaw, last = frame.telemetry.yaw, self._last_yaw
-        before = h.xy
         kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
 
         region = SearchRegion(
@@ -217,8 +222,10 @@ class Localizer:
             if not kf.update(np.array([fix.x, fix.y, fix.heading]), R):
                 fix = None
         h.scores.append(fix.score if fix is not None else 0.0)
-        h.misses = 0 if fix is not None else h.misses + 1
-        h.travelled += float(np.hypot(*(h.xy - before)))
+        if fix is not None:
+            if h.last_hit_xy is not None:
+                h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
+            h.last_hit_t, h.last_hit_xy = frame.t, h.xy
         return fix
 
     # -- helpers ----------------------------------------------------------
@@ -242,9 +249,12 @@ class Localizer:
             return Estimate(t, Status.LOST, latency_ms=latency_ms)
         lead = max(self.hypotheses, key=lambda h: h.mean_score)
         x, y, _, _, heading = lead.filter.x
+        status = self.status
+        if status is Status.TRACKING and lead.filter.pos_sigma > self.cfg.trust_sigma_m:
+            status = Status.COASTING
         return Estimate(
             t,
-            self.status,
+            status,
             float(x),
             float(y),
             float(heading),

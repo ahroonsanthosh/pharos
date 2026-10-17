@@ -1,6 +1,5 @@
 """Service: maps, feeds from recorded video + DJI SRT, browser frames, HTTP API."""
 
-import math
 import time
 
 import cv2
@@ -13,44 +12,7 @@ from fastapi.testclient import TestClient
 from pharos.server.app import create_app
 from pharos.server.feeds import Feed, FeedSpec
 from pharos.server.store import MapStore
-
-
-def write_dji_recording(rec, folder):
-    """Recorded flight as a DJI pilot would bring it home: an MP4 and its SRT."""
-    video = folder / "DJI_0001.MP4"
-    fps = 2.0
-    h, w = rec.frames[0].image.shape[:2]
-    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-    lines = []
-    for i, (frame, truth) in enumerate(zip(rec.frames, rec.truth, strict=True)):
-        writer.write(frame.image)
-        tel = frame.telemetry
-        lat, lon = rec_geo(truth)
-        lines += [
-            str(i + 1),
-            f"{srt_time(i / fps)} --> {srt_time((i + 1) / fps)}",
-            f"[latitude: {lat:.7f}] [longitude: {lon:.7f}] [rel_alt: {tel.altitude:.2f} abs_alt: 0]"
-            f" [gb_yaw: {math.degrees(tel.yaw):.1f} gb_pitch: {math.degrees(tel.pitch) - 90:.1f}"
-            f" gb_roll: {math.degrees(tel.roll):.1f}]",
-            "",
-        ]
-    writer.release()
-    srt = folder / "DJI_0001.SRT"
-    srt.write_text("\n".join(lines))
-    return video, srt
-
-
-GEO = {}
-
-
-def srt_time(s: float) -> str:
-    return (
-        f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{int(s % 60):02d},{int(s % 1 * 1000):03d}"
-    )
-
-
-def rec_geo(truth):
-    return GEO["map"].to_latlon(truth.x, truth.y)
+from tests.conftest import write_dji_recording
 
 
 def wait_for(feed, states=("finished", "error"), timeout=120):
@@ -62,10 +24,9 @@ def wait_for(feed, states=("finished", "error"), timeout=120):
 
 def test_recorded_dji_flight(small_sim, tmp_path):
     geomap, rec = small_sim
-    GEO["map"] = geomap
     store = MapStore(tmp_path / "maps")
     store.add("test-area", geomap)
-    video, srt = write_dji_recording(rec, tmp_path)
+    video, srt = write_dji_recording(rec, geomap, tmp_path)
     spec = FeedSpec(source=str(video), map="test-area", hfov_deg=70.0, telemetry=f"srt:{srt}")
     feed = Feed("feed-1", spec, store)
     assert wait_for(feed) == "finished", feed.error
@@ -83,7 +44,11 @@ def test_browser_frames(small_sim, tmp_path):
     store.add("test-area", geomap)
     spec = FeedSpec(source="browser", map="test-area", hfov_deg=70.0, altitude_m=170, rate_hz=50)
     feed = Feed("feed-2", spec, store)
-    for frame in rec.frames[:4]:
+    # Live sources drop frames that arrive while one is processing, so keep sending.
+    deadline = time.monotonic() + 60
+    for frame in rec.frames:
+        if len(feed.records) >= 2 or time.monotonic() > deadline:
+            break
         feed.pushed.put(cv2.imencode(".jpg", frame.image)[1].tobytes())
         time.sleep(0.4)
     feed.stop()

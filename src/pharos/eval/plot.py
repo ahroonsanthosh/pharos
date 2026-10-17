@@ -11,7 +11,11 @@ from pharos.geomap import GeoMap
 from pharos.types import Estimate, GroundTruth, Status
 
 _TRUTH = (80, 200, 80)  # BGR
-_COLORS = {Status.TRACKING: (255, 140, 0), Status.CONVERGING: (0, 165, 255)}
+_COLORS = {
+    Status.TRACKING: (255, 140, 0),
+    Status.CONVERGING: (0, 165, 255),
+    Status.COASTING: (0, 165, 255),
+}
 
 
 def draw_track(
