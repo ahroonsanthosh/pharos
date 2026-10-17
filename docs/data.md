@@ -18,6 +18,7 @@ ideal. 10 m imagery only works from several kilometres up.
 |---|---|---|---|
 | USGS **NAIP** | contiguous US | 0.6 to 1 m, 4-band | public domain; free on AWS Open Data and Microsoft Planetary Computer |
 | IGN **BD ORTHO** | France | 20 cm | Etalab Open Licence 2.0 (attribution) |
+| IGN **PNOA** | Spain | 25 cm, free WMS (4096 px per request) | CC BY 4.0 |
 | swisstopo **SWISSIMAGE 10 cm** | Switzerland | 10 cm | free since 2021 (attribution) |
 | PDOK **Luchtfoto** | Netherlands | 8 to 25 cm | CC-BY 4.0 / CC0 |
 | Dataforsyningen **orthophotos** | Denmark | 12 cm | free (attribution) |

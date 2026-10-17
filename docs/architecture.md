@@ -127,11 +127,22 @@ lets a confirmed track coast through stretches with nothing to match. Its
 error model is deliberately honest: attitude noise between frames shifts all
 projected points alike and cannot be separated from motion.
 
+**Turns.** In a banked turn the camera looks 40 to 50 degrees sideways. Map
+matches there were biased (half of the confident ones on a real fixed-wing
+were 20+ m off, against 9% near nadir), so only odometry runs beyond 30
+degrees of tilt. Odometry's error model grows with tilt too: an attitude
+error moves the ground under the optical axis by h·δ/cos²(tilt), 2.4 times
+more at 50 degrees, so a track coasts through a turn instead of claiming
+precision it does not have. Steps implying more than `max_speed` are
+dropped outright.
+
 **Losing and finding a track.** A confirmed track that stops matching keeps
 searching around its prediction (reported as coasting, not trusted) for as
-long as that window stays searchable; the check happens before the search, so
-a wide search cannot resurrect a track that is already out of reach. Coming
-back from coasting needs consecutive matches. Once lost, the next searches are
+long as that window stays searchable and at most `max_coast_s`; the check
+happens before the search, so a wide search cannot resurrect a track that is
+already out of reach, and occasional weak matches cannot keep a wrong one
+alive. Coming back from coasting needs consecutive, stronger matches spread
+over 40 m of flight: overlapping frames see the same look-alike. Once lost, the next searches are
 restricted to where the aircraft can have flown since its last match, and a
 candidate found there needs fewer confirmations: continuity is evidence too.
 

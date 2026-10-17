@@ -36,6 +36,9 @@ class LocalizerConfig:
     # on the ground, taking off, or looking at the horizon.
     min_altitude_m: float = 15.0
     max_tilt_deg: float = 60.0
+    # Beyond this tilt only odometry runs. On a real fixed-wing, half the confident matches
+    # in banked turns were 20+ m off (lens distortion, attitude timing) against 9% near nadir.
+    max_match_tilt_deg: float = 30.0
     # Acquisition
     prior_center: tuple[float, float] | None = None  # e.g. last GNSS fix before denial
     prior_radius_m: float = float("inf")
@@ -63,10 +66,13 @@ class LocalizerConfig:
     max_coast_s: float = 30.0
     trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
     # Trusting a track again after coasting takes consecutive matches spread over this much
-    # ground: overlapping frames see the same look-alike, so they are not independent.
+    # flown ground: overlapping frames see the same look-alike, so they are not independent.
+    # Untrusted, a match must stand out more and counts less; a track that stays
+    # untrusted for max_coast_s is dropped however many weak matches keep it company.
     reconfirm_frames: int = 2
     reconfirm_distance_m: float = 40.0
-    untrusted_meas_inflation: float = 4.0  # one match must not collapse an untrusted track
+    untrusted_extra_excess: float = 1.0
+    untrusted_meas_inflation: float = 4.0
     meas_sigma_m: float = 3.0
     meas_heading_sigma_deg: float = 2.0
     search_sigmas: float = 3.0
@@ -81,8 +87,13 @@ class LocalizerConfig:
 
 
 def usable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
-    """Whether a frame can be matched: high enough, and not looking at the horizon."""
+    """Whether a frame shows the ground: high enough, and not looking at the horizon."""
     return tel.altitude >= cfg.min_altitude_m and tel.tilt <= np.radians(cfg.max_tilt_deg)
+
+
+def matchable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
+    """Whether a frame is worth matching against the map, not only for odometry."""
+    return usable_view(tel, cfg) and tel.tilt <= np.radians(cfg.max_match_tilt_deg)
 
 
 @dataclass
@@ -96,7 +107,9 @@ class _Hypothesis:
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
     near_lost_track: bool = False  # found where a just-lost track could have flown to
     streak: int = 0  # consecutive matches
-    streak_from: np.ndarray | None = None  # position at the first match of the streak
+    flown: float = 0.0  # dead-reckoned distance, metres
+    streak_from: float = 0.0  # ``flown`` at the first match of the streak
+    untrusted_since: float = 0.0  # time trust was lost
 
     @property
     def mean_score(self) -> float:
@@ -138,17 +151,19 @@ class Localizer:
         start = time.perf_counter()
         fix = None
         usable = usable_view(frame.telemetry, self.cfg)
+        matchable = matchable_view(frame.telemetry, self.cfg)
         self._motion = None
         if self.odometry is not None:
             if usable:
                 self._motion = self._plausible(self.odometry.step(frame, self.scale), frame.t)
             else:
                 self.odometry.reset()
-                for h in self.hypotheses:
-                    h.streak = 0  # no look at the ground breaks a run of matches
+        if not matchable:
+            for h in self.hypotheses:
+                h.streak = 0  # a frame not matched breaks a run of matches
         if self.status is Status.LOST:
             # Consecutive frames overlap heavily, so searching every frame buys little.
-            if usable and self._frames_in_state % self.cfg.lost_search_every == 0:
+            if matchable and self._frames_in_state % self.cfg.lost_search_every == 0:
                 self._acquire(frame)
             if self.status is Status.LOST:
                 self._frames_in_state += 1
@@ -161,7 +176,7 @@ class Localizer:
                     if not self._searchable(h, frame.t) and h.last_hit_xy is not None:
                         self._lost_track = (h.last_hit_t, h.last_hit_xy.copy())
                 self.hypotheses = [h for h in self.hypotheses if self._searchable(h, frame.t)]
-            fixes = [self._measure(h, frame) if usable else None for h in self.hypotheses]
+            fixes = [self._measure(h, frame) if matchable else None for h in self.hypotheses]
             alive = [
                 (h, f)
                 for h, f in zip(self.hypotheses, fixes, strict=True)
@@ -175,7 +190,7 @@ class Localizer:
                     self._learn(fix, frame)
             elif self.status is Status.CONVERGING:
                 self._frames_in_state += 1
-                if usable and self._frames_in_state % self.cfg.reacquire_every == 0:
+                if matchable and self._frames_in_state % self.cfg.reacquire_every == 0:
                     self._acquire(frame)
                 self._try_confirm()
             if not self.hypotheses:
@@ -265,14 +280,16 @@ class Localizer:
         dt = frame.t - self._last_t if self._last_t is not None else 0.0
         yaw, last = frame.telemetry.yaw, self._last_yaw
         m = self._motion
+        before = h.xy
         if m is not None:
             g = self.odometry_gain
             kf.predict_motion(dt, m.d_body, m.d_heading, g * m.sigma_m, g * m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
+        h.flown += float(np.hypot(*(h.xy - before)))
         if kf.pos_sigma > cfg.trust_sigma_m and h.trusted:
             h.trusted = False  # a wide search must be confirmed before it is trusted again
-            h.streak = 0
+            h.streak, h.untrusted_since = 0, frame.t
 
     def _measure(self, h: _Hypothesis, frame: Frame) -> Fix | None:
         cfg, kf, m = self.cfg, h.filter, self._motion
@@ -292,9 +309,8 @@ class Localizer:
         )
         fixes = self._match(frame, region)
         fix = fixes[0] if fixes else None
-        if fix is not None and (
-            fix.score < cfg.track_min_score or fix.excess < cfg.track_min_excess
-        ):
+        min_excess = cfg.track_min_excess + (0.0 if h.trusted else cfg.untrusted_extra_excess)
+        if fix is not None and (fix.score < cfg.track_min_score or fix.excess < min_excess):
             fix = None
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
@@ -313,13 +329,13 @@ class Localizer:
                 self._learn_odometry(float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2])))
         h.scores.append(fix.score if fix is not None else 0.0)
         if fix is None:
-            h.streak, h.streak_from = 0, None
+            h.streak = 0
             return None
         if h.streak == 0:
-            h.streak_from = h.xy
+            h.streak_from = h.flown
         h.streak += 1
-        moved = float(np.hypot(*(h.xy - h.streak_from)))
-        if h.streak >= cfg.reconfirm_frames and moved >= cfg.reconfirm_distance_m:
+        flown = h.flown - h.streak_from
+        if h.streak >= cfg.reconfirm_frames and flown >= cfg.reconfirm_distance_m:
             h.trusted = True
         if h.last_hit_xy is not None:
             h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
@@ -349,7 +365,8 @@ class Localizer:
         """A confirmed track lives while its predicted position can still be searched for."""
         cfg = self.cfg
         within = cfg.search_sigmas * h.filter.pos_sigma <= cfg.max_search_m
-        return within and t - h.last_hit_t <= cfg.max_coast_s
+        recent = t - (h.last_hit_t if h.trusted else h.untrusted_since) <= cfg.max_coast_s
+        return within and recent
 
     def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
         try:

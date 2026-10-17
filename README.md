@@ -20,7 +20,8 @@ docker compose up            # then open http://localhost:8000
 The dashboard takes feeds from anywhere: a DJI controller or OBS pushing
 RTMP/SRT, RTSP/HLS/UDP stream URLs, an HDMI capture card or webcam, recorded
 videos with DJI `.SRT` telemetry, or a built-in demo flight. Telemetry
-comes from MAVLink (ArduPilot/PX4), DJI subtitle files or manual entry. When
+comes from MAVLink (ArduPilot/PX4), DJI subtitle files or manual entry;
+recorded footage can also pair with an ArduPilot log. When
 the aircraft reports GPS, it is drawn next to the visual estimate, so every
 real flight measures accuracy. Setup for each source is in
 [docs/laptop.md](docs/laptop.md).
@@ -34,7 +35,17 @@ photo sets, old flight videos. Footage is processed as fast as the CPU allows.
 pharos analyze DJI_0042.MP4 --map area.tif --hfov 70        # .SRT next to the video is used
 pharos analyze photos/ --map area.tif                       # EXIF GPS/time, DJI or senseFly XMP
 pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry at all
-pharos probe photos/ --map area.tif     # per-frame match quality, for footage with GPS
+pharos analyze cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5   # ArduPilot
+```
+
+A separate camera and an autopilot log share no clock; `pharos sync` finds
+the offset from the footage alone. On a flight with GNSS, `pharos probe`
+measures per-frame match quality and calibrates the camera once (mount
+misalignment and effective field of view):
+
+```bash
+pharos sync cam.mkv --log flight.bin --log-sync 1 --hfov 77 --start 300
+pharos probe cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5
 ```
 
 It writes `track.geojson`, `track.kml` (opens in Google Earth), `track.csv`,
@@ -88,31 +99,33 @@ initial position) against a summer reference map:
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | <10 m | wrong | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.9 | 4.3 | 0.1 | 84% | 0.0% | 367 |
-| autumn_low_sun | 84% | 9.5 | 2.4 | 5.7 | 0.2 | 84% | 0.0% | 379 |
-| dusk_haze | 84% | 9.5 | 3.0 | 21.1 | 0.8 | 73% | 0.0% | 364 |
-| grid_farmland | 85% | 9.0 | 2.0 | 4.6 | 0.2 | 85% | 0.0% | 320 |
-| kitchen_sink | 84% | 9.5 | 2.7 | 5.4 | 0.9 | 84% | 0.0% | 266 |
-| land_change | 84% | 9.5 | 2.7 | 5.1 | 0.1 | 84% | 0.0% | 311 |
-| no_compass_spinning | 84% | 9.5 | 2.2 | 3.6 | 0.1 | 84% | 0.0% | 293 |
-| nominal | 85% | 9.0 | 1.9 | 3.9 | 0.1 | 85% | 0.0% | 312 |
-| sensor_errors | 84% | 9.5 | 7.0 | 9.7 | 0.2 | 81% | 0.0% | 353 |
-| spring_clouds_on_map | 72% | 9.5 | 3.3 | 9.0 | 0.6 | 72% | 0.0% | 345 |
-| tilted_camera | 85% | 9.0 | 1.7 | 3.6 | 0.1 | 85% | 0.0% | 307 |
-| winter_snow | 69% | 18.5 | 2.3 | 4.3 | 0.2 | 69% | 0.0% | 238 |
+| altitude_bias | 84% | 9.5 | 1.9 | 4.4 | 0.1 | 84% | 0.0% | 335 |
+| autumn_low_sun | 84% | 9.5 | 2.4 | 5.6 | 0.2 | 84% | 0.0% | 358 |
+| dusk_haze | 84% | 9.5 | 2.9 | 21.9 | 0.8 | 72% | 0.0% | 344 |
+| grid_farmland | 85% | 9.0 | 2.0 | 4.6 | 0.2 | 85% | 0.0% | 251 |
+| kitchen_sink | 60% | 9.5 | 3.0 | 7.3 | 1.0 | 60% | 0.0% | 321 |
+| land_change | 84% | 9.5 | 2.6 | 5.0 | 0.2 | 84% | 0.0% | 319 |
+| no_compass_spinning | 84% | 9.5 | 2.2 | 3.6 | 0.1 | 84% | 0.0% | 315 |
+| nominal | 85% | 9.0 | 1.9 | 3.9 | 0.1 | 85% | 0.0% | 299 |
+| sensor_errors | 84% | 9.5 | 7.0 | 9.7 | 0.1 | 82% | 0.0% | 298 |
+| spring_clouds_on_map | 62% | 9.5 | 2.8 | 6.9 | 0.5 | 62% | 0.0% | 323 |
+| tilted_camera | 85% | 9.0 | 1.7 | 3.6 | 0.1 | 85% | 0.0% | 286 |
+| winter_snow | 69% | 18.5 | 2.2 | 4.3 | 0.2 | 69% | 0.0% | 338 |
 <!-- bench:end -->
 
 Columns: share of frames in `tracking`, time to first confirmed fix, median
 and 95th-percentile position error while tracking, median heading error,
 share of all frames within 10 m, share of tracking frames more than 25 m off
-(confidently wrong), and median processing time per frame with four scenarios
-running in parallel on a 4-core CPU.
+(confidently wrong), and median processing time per frame on a fully loaded
+4-core CPU.
 
 Availability tops out near 85% because a candidate must cover 120 m of new
 ground (about 10 s) before it is trusted. Lower rows are informative:
-`spring_clouds_on_map` flies under clouds baked into the reference map, where
-odometry carries the track part of the way; `winter_snow` needs longer to
-find a distinctive start under the stricter gate that real imagery required; `sensor_errors` shows that a 2° camera mount
+`spring_clouds_on_map` and `kitchen_sink` lose frames to the stricter rules
+real video required (a coasting track must fly 40 m on consecutive stronger
+matches before it is trusted again, and is dropped after 30 s); they report
+those frames as coasting, not wrong. `winter_snow` needs longer to find a
+distinctive start; `sensor_errors` shows that a 2° camera mount
 misalignment becomes a ~6 m bias that no single frame can reveal; the
 `dusk_haze` tail is one turn over forest where the filter coasts straight.
 
@@ -129,9 +142,9 @@ position given:
 
 | reference map | frames trusted | median error | 95th pct | confidently wrong |
 |---|---:|---:|---:|---:|
-| NAIP 2015 (July, 1 m) | 43% | 11 m | 19 m | 0% |
-| NAIP 2019 (October) | 25% | 12 m | 17 m | 0% |
-| NAIP 2023 (May) | 39% | 11 m | 18 m | 0% |
+| NAIP 2015 (July, 1 m) | 36% | 10 m | 20 m | 0% |
+| NAIP 2019 (October) | 18% | 11 m | 15 m | 0% |
+| NAIP 2023 (May) | 26% | 12 m | 19 m | 0% |
 
 Errors are measured against the photos' own GPS (about 1.5 m accurate). How
 it got here, and what this footage taught:
@@ -149,7 +162,8 @@ it got here, and what this footage taught:
   prediction while that is still feasible (reported as coasting, re-trusted
   only after consecutive matches), and a lost track is re-acquired within the
   area the aircraft can have reached, with fewer confirmations needed.
-  Together with odometry this raised coverage from 0 to 4% to 25 to 43%.
+  Together with odometry this raised coverage from 0 to 4% to 25 to 43%
+  (18 to 36% after the stricter re-trust rules the video below needed).
 * Per frame, the true location stands out from noise in 55 to 73% of frames
   (`pharos probe`); feature-scale variations tuned on this footage did not
   beat the defaults.
@@ -162,6 +176,55 @@ it got here, and what this footage taught:
 This survey is a hard case (low altitude, tight loops, mostly lawn and
 trees). Coverage is the open problem; see below.
 
+## Real video: a fixed-wing over Spanish farmland
+
+No openly licensed downward-looking DJI video with its `.SRT` could be found,
+so the test uses the *PinPoint* validation dataset (Zenodo, CC BY 4.0): two
+flights of an ArduPlane VTOL with a consumer camera (Sony IMX477, 1280×720 at
+60 fps) on a pitch/yaw servo mount, each with its ArduPilot `.bin` log. The
+camera and autopilot share no clock. The reference map is Spain's PNOA
+orthophoto (IGN, CC BY 4.0, flown July 2024), fetched over its free WMS.
+
+The workflow is the one a user would follow, from a cold start with no
+initial position; GNSS from the log is used only to calibrate once and to
+score:
+
+1. `pharos sync` placed the video 1.54 s after the first GNSS fix. The
+   dataset publishes 1.2 s, set by eye; at 1.2 s odometry steps disagree by
+   8.2 m, at 1.54 s by 1.8 m. On flight 2 it agreed with the published value.
+2. `pharos probe` on flight 1 measured an effective field of view of 76.7°
+   (published 72.3°; their own by-eye estimate was 78°) and a mount offset of
+   4.4° backward, 3.0° right.
+3. `pharos analyze` over the cruise part of each flight, 2 frames/s:
+
+| flight | camera calibration | frames trusted | median error | 95th pct | confidently wrong |
+|---|---|---:|---:|---:|---:|
+| 1: farmland, ~105 m, 13 min | from flight 1 | 63% | 5.6 m | 24 m | 4.7% |
+| 2: river valley, ~80 m, ~30 m relief | from flight 1 | 16% | 9.2 m | 44 m | 16% |
+
+Flight 1 works: the track follows the survey lines and coasts through the
+turns. It is not yet safe: 4.7% of trusted frames are 25 to 69 m off,
+mostly in the seconds after a steeply banked turn. Flight 2, lower over hilly
+ground, mostly fails; flat-ground rectification and odometry are wrong by up
+to a third of the height there, and a DEM is the missing piece (see next
+steps). What these flights taught:
+
+* **ArduPilot logs nonsense at gimbal lock.** A servo mount pointing straight
+  down logs roll -90, yaw -90 for a camera at roll 0, yaw 3: turned around in
+  half the samples of flight 2. Those samples now inherit roll and yaw.
+* **Ridges.** Along a straight field edge the correlation peak is a line,
+  and a second bump on it 70 m up-track scored as well as the truth. Each
+  match now reports its peak's spread and the filter uses it.
+* **Sync is attitude.** 0.3 s of clock error gives every frame the bank
+  angle of another moment; odometry error doubled.
+* **Banked turns.** Half the confident matches above 20° tilt were 20 m or
+  more off (likely lens distortion and attitude timing, which matter most
+  there), so only odometry
+  runs beyond 30°, with an error model that grows as 1/cos²(tilt).
+* **Look-alikes come in runs.** Two consecutive matches 0.5 s apart are one
+  observation; re-trusting a track now takes 40 m of flight, and weak matches
+  can no longer keep a wrong coasting track alive.
+
 ## Next steps
 
 * **Multi-frame evidence:** accumulate aligned score maps over several frames
@@ -169,19 +232,20 @@ trees). Coverage is the open problem; see below.
   needs most.
 * **Feature scales tuned on real imagery** (canopy and lawn texture, NAIP's
   softer resolution), validated on the Aukerman set and future flights.
-* **More real flights:** a DJI MP4 + SRT gives ground truth for free.
-* **Calibration helpers** for camera mount offset and video delay, run once
-  on a flight with GPS.
-* **Uncertainty from the correlation peak** (its curvature) instead of a
-  fixed measurement error.
-* **Terrain relief** via a free DEM (Copernicus GLO-30) for hilly areas.
+* **Terrain relief** via a free DEM (Copernicus GLO-30): rectification and
+  odometry assume flat ground, which is what limits the hilly flight below.
+* **Lens distortion:** consumer cameras need undistorting; matching is
+  turned off in steep banks partly because the distorted image edges then
+  dominate.
+* **More real flights:** a DJI MP4 + SRT gives ground truth for free; no
+  openly licensed downward-looking DJI video with its SRT was found online.
 
 ## Layout
 
 ```
 src/pharos/
   geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
-  footage.py  analyze.py  telemetry.py
+  footage.py  analyze.py  telemetry.py  sync.py
   vision/   rectify, features, correlate, matcher, odometry
   nav/      filter, localizer
   sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml

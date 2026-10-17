@@ -115,7 +115,8 @@ class VisualOdometry:
         ok = np.all(np.isfinite(ground_a), axis=1) & np.all(np.isfinite(ground_b), axis=1)
         if ok.sum() < self.cfg.min_inliers:
             return None
-        return self._fit(ground_b[ok], ground_a[ok], tel_b.altitude * scale_b)
+        tilt = max(tel_a.tilt, tel_b.tilt)
+        return self._fit(ground_b[ok], ground_a[ok], tel_b.altitude * scale_b, tilt)
 
     # -- internals --------------------------------------------------------
 
@@ -128,7 +129,9 @@ class VisualOdometry:
         ground[far] = np.nan
         return ground
 
-    def _fit(self, src: np.ndarray, dst: np.ndarray, altitude: float) -> Motion | None:
+    def _fit(
+        self, src: np.ndarray, dst: np.ndarray, altitude: float, tilt: float = 0.0
+    ) -> Motion | None:
         cfg = self.cfg
         gsd = altitude / self.camera.fx
         M, inliers = cv2.estimateAffinePartial2D(
@@ -154,7 +157,9 @@ class VisualOdometry:
         residual = np.sqrt(np.mean(np.sum((moved - dst[mask]) ** 2, axis=1)))
         spread = np.sqrt(np.mean(np.sum((src[mask] - src[mask].mean(0)) ** 2, axis=1)))
         distance = float(np.hypot(*t))
+        # an attitude error moves the ground under the optical axis by h * d / cos^2(tilt)
         attitude = altitude * np.tan(np.radians(cfg.attitude_sigma_deg)) * np.sqrt(2)
+        attitude /= np.cos(min(tilt, np.radians(75))) ** 2
         sigma_m = residual / np.sqrt(n) * 2 + cfg.relative_sigma * distance + attitude
         sigma_heading = residual / (np.sqrt(n) * max(spread, 1.0)) * 2 + np.radians(0.3)
         return Motion(t.copy(), -theta, float(sigma_m), float(sigma_heading), n, scale)

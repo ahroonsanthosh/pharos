@@ -24,7 +24,7 @@ import numpy as np
 from pharos.footage import Footage
 from pharos.geomap import GeoMap
 from pharos.geometry import rot2
-from pharos.nav.localizer import LocalizerConfig, usable_view
+from pharos.nav.localizer import LocalizerConfig, matchable_view
 from pharos.vision.matcher import CorrelationMatcher, SearchRegion
 
 THRESHOLDS = (1.0, 1.5, 2.0)
@@ -62,7 +62,7 @@ def probe(
     for i, (frame, gnss) in enumerate(frames):
         if gnss is None or (xy := geomap.from_latlon(*gnss)) is None:
             continue
-        if not usable_view(frame.telemetry, config):
+        if not matchable_view(frame.telemetry, config):
             continue
         yaw = frame.telemetry.yaw
         span = math.radians(cfg.heading_span_deg) if yaw is not None else math.pi
