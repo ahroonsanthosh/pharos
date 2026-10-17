@@ -144,8 +144,8 @@ and the other matches. On a real flight the window found that odometry ran
 Matches less than 40 m apart see largely the same ground and share their
 errors: a look-alike fools a run of overlapping frames alike. Each of n such
 matches therefore counts as 1/n of one. Counted as independent, a run of
-sixteen look-alike matches outvoted odometry and the solve claimed 3 to 5 m
-while 50 m off; on a real flight this one rule cut the whole-flight
+sixteen look-alike matches in a test outvoted odometry and the solve claimed
+3 to 5 m while 50 m off; on a real flight this one rule cut the whole-flight
 misleading rate from 1.9% to 0.5% and brought 99% of trusted errors within
 three sigmas (from 93%). Frames leaving the window become a prior on the two oldest kept
 frames (Schur complement over only the factors that leave with them, so
@@ -177,7 +177,10 @@ degrees of tilt, and beyond 20 degrees while the tilt changes faster than
 5 degrees per second (rolling into or out of a bank, when attitude timing
 errors are largest). The window loosens the odometry scale and heading
 increments with tilt too: terrain under an oblique view is further from the
-assumed height than under nadir. Odometry's error model grows with tilt too: an attitude
+assumed height than under nadir. And wind turns with the aircraft (the crab
+angle flips between opposite legs), so the body-frame velocity prior allows
+4 m/s² of change: at 2, dead reckoning 10 s into a real bank was 36 m off
+with a 16 m sigma. Odometry's error model grows with tilt too: an attitude
 error moves the ground under the optical axis by h·δ/cos²(tilt), 2.4 times
 more at 50 degrees, so a track coasts through a turn instead of claiming
 precision it does not have. Steps implying more than `max_speed` are
@@ -187,7 +190,11 @@ dropped outright.
 searching around its prediction (reported as coasting) while that search
 stays within `max_search_m` and for at most `max_coast_s` after its last
 inlier match; longer coasts with wider searches were tried on real flights
-and accepted more look-alikes. A lost track is not forgotten: its window
+and accepted more look-alikes. An untrusted track that rejects three strong
+matches within 10 s, all pointing to one place, gives up its belief sooner:
+the place it was pointed to becomes a candidate that must win confirmation
+(a run of matches counts as one, so it cannot simply drag the track over).
+A lost track is not forgotten: its window
 keeps dead reckoning on odometry, gyro and compass, so a position is still
 reported, as coasting, with an uncertainty that grows honestly. The search
 for a new track is confined to that position's 3-sigma region instead of the

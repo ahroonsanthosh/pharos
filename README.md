@@ -143,112 +143,114 @@ The simulator is still kinder than reality (flat ground, the map and the
 drone view share exact geometry). Expect real cross-season match scores to be
 lower and treat these numbers as an upper bound until validated on flights.
 
-## First real-imagery test
+## Real flights
 
-Public test data, all free: OpenDroneMap's *Aukerman* survey (CC0): 77 nadir
-photos from a senseFly eBee fixed-wing at about 100 m, June 2016, with GPS.
-It is matched against USGS NAIP imagery from three years, with no initial
-position given:
+Three public datasets, all free, each localized from a cold start with no
+initial position; GNSS is used only to calibrate a camera once and to score.
+Every frame of a flight counts. A frame is **covered** when its position is
+trusted and within 25 m of GNSS, and **misleading** when it is trusted and
+further off. A trusted position has an uncertainty of at most 10 m and two
+independent supporting matches; otherwise the position is still reported, as
+coasting, with its honest uncertainty, so the table also scores every
+position against its own sigma.
 
-| reference map | frames trusted | median error | 95th pct | confidently wrong |
-|---|---:|---:|---:|---:|
-| NAIP 2015 (July, 1 m) | 36% | 10 m | 20 m | 0% |
-| NAIP 2019 (October) | 18% | 11 m | 15 m | 0% |
-| NAIP 2023 (May) | 26% | 12 m | 19 m | 0% |
+| flight | | covered | misleading | trusted within 3σ | any position within 25 m | any position within 3σ |
+|---|---|---:|---:|---:|---:|---:|
+| PinPoint 1: farmland, ~105 m, 13 min | live | 52% | 0.3% | 99% | 87% | 99% |
+| | whole flight | 86% | 0.4% | 99% | 97% | 99% |
+| PinPoint 2: river valley, ~80 m, 15 min | live | 11% | 0.0% | 99% | 43% | 100% |
+| | whole flight | 32% | 0.0% | 100% | 57% | 100% |
+| Aukerman: 77 photos, ~100 m | live | 19% | 0.0% | 100% | 35% | 100% |
+| | whole flight | 35% | 0.0% | 100% | 70% | 100% |
 
-Errors are measured against the photos' own GPS (about 1.5 m accurate). How
-it got here, and what this footage taught:
+*Live* is what the aircraft would have been told in flight; *whole flight*
+is `pharos analyze` on the recording, solved at once. Flight 2 was localized
+with the camera calibration from flight 1, out of sample.
 
-* The first version confirmed look-alike places 0.7 to 1.4 km away. Real
-  photos match far more weakly than synthetic ones (0.2 to 0.6 vs 0.8 to
-  0.9), so fixed score thresholds were unsafe. Matches are now judged
-  against the noise of their own search window.
-* Visual odometry between photos replaced the constant-velocity guess (it
-  needed windows up to 150 m with 4 to 13 s between photos). Its error
-  differs by platform (a banking fixed-wing is far noisier than a gimbal), so
-  confirmed tracks calibrate it from their own innovations.
-* Tracks were lost at every tight turn, where photos are up to 22 s apart
-  and do not overlap. A confirmed track now keeps searching around its
-  prediction while that is still feasible (reported as coasting, re-trusted
-  only after consecutive matches), and a lost track is re-acquired within the
-  area the aircraft can have reached, with fewer confirmations needed.
-  Together with odometry this raised coverage from 0 to 4% to 25 to 43%
-  (18 to 36% after the stricter re-trust rules the video below needed).
-* Per frame, the true location stands out from noise in 55 to 73% of frames
-  (`pharos probe`); feature-scale variations tuned on this footage did not
-  beat the defaults.
-* Photo GPS altitude was above the WGS84 ellipsoid, not sea level: 34 m, a
-  50% scale error at this altitude. The eBee's camera attitude is recorded,
-  but its sign convention had to be determined from the data.
-* The map whose season matches the flight wins, even though it predates a
-  house and path visible in the photos.
+The headline is honesty rather than coverage. Reported uncertainties hold
+on every flight: 99% or more of positions, trusted or coasting, are within
+three sigmas of GNSS, and the misleading rate is at most 0.4%. The previous
+version reported 3.4% of flight 2's frames as trusted and wrong, and only a
+third of its positions were within their sigma. Flight 2 now carries a
+position within 25 m in 57% of its frames (from 33%), most of it coasting.
+The cost is trusted coverage where matching was already good: flight 1's
+whole-flight coverage fell from 97% to 86% (live, 70% to 52%) and
+Aukerman's from 49% to 35%, because positions that were trusted on
+optimistic sigmas now coast on honest ones; 97% of flight 1's frames still
+carry a position within 25 m.
 
-This survey is a hard case (low altitude, tight loops, mostly lawn and
-trees). Coverage is the open problem; see below.
+### Data and workflow
 
-## Real video: a fixed-wing over Spanish farmland
+*PinPoint* (Zenodo, CC BY 4.0) is two flights of an ArduPlane VTOL with a
+consumer camera (Sony IMX477, 1280×720 at 60 fps) on a pitch/yaw servo mount,
+each with its ArduPilot `.bin` log; the camera and autopilot share no clock.
+The map is Spain's PNOA orthophoto (IGN, CC BY 4.0, July 2024) over its free
+WMS. No openly licensed downward-looking DJI video with its `.SRT` could be
+found. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
+22 s apart, matched against USGS NAIP 2015 (`--map-accuracy 6`: NAIP is good
+to about 6 m).
 
-No openly licensed downward-looking DJI video with its `.SRT` could be found,
-so the test uses the *PinPoint* validation dataset (Zenodo, CC BY 4.0): two
-flights of an ArduPlane VTOL with a consumer camera (Sony IMX477, 1280×720 at
-60 fps) on a pitch/yaw servo mount, each with its ArduPilot `.bin` log. The
-camera and autopilot share no clock. The reference map is Spain's PNOA
-orthophoto (IGN, CC BY 4.0, flown July 2024), fetched over its free WMS.
-
-The workflow is the one a user would follow, from a cold start with no
-initial position; GNSS from the log is used only to calibrate once and to
-score:
-
-1. `pharos sync` placed the video 1.54 s after the first GNSS fix. The
-   dataset publishes 1.2 s, set by eye; at 1.2 s odometry steps disagree by
-   8.2 m, at 1.54 s by 1.8 m. On flight 2 it agreed with the published value.
+1. `pharos sync` placed flight 1's video 1.54 s after the first GNSS fix
+   (published by eye: 1.2 s; odometry steps disagree by 8.2 m at 1.2 s and
+   by 1.8 m at 1.54 s). On flight 2 it agreed with the published value.
 2. `pharos probe` on flight 1 measured an effective field of view of 76.7°
-   (published 72.3°; their own by-eye estimate was 78°) and a mount offset of
-   4.4° backward, 3.0° right.
-3. `pharos analyze` over the cruise part of each flight, 2 frames/s:
+   (published 72.3°) and a mount offset of 4.4° back, 3.0° right.
+3. `pharos analyze` over the cruise part of each flight at 2 frames/s.
 
-| flight | camera calibration | frames trusted | median error | 95th pct | confidently wrong |
-|---|---|---:|---:|---:|---:|
-| 1: farmland, ~105 m, 13 min | from flight 1 | 63% | 5.6 m | 24 m | 4.7% |
-| 2: river valley, ~80 m, ~30 m relief | from flight 1 | 16% | 9.2 m | 44 m | 16% |
+### What real footage taught
 
-Flight 1 works: the track follows the survey lines and coasts through the
-turns. It is not yet safe: 4.7% of trusted frames are 25 to 69 m off,
-mostly in the seconds after a steeply banked turn. Flight 2, lower over hilly
-ground, mostly fails; flat-ground rectification and odometry are wrong by up
-to a third of the height there, and a DEM is the missing piece (see next
-steps). What these flights taught:
-
+* **Overlapping frames are one observation.** Consecutive frames see the same
+  ground, so a look-alike fools a run of them alike. Counted as independent,
+  sixteen such matches in a test outvoted odometry and the solve claimed 3 to
+  5 m while 50 m off. Matches less than 40 m apart now share one vote; on flight 1
+  this alone cut the whole-flight misleading rate from 1.9% to 0.5%.
+* **Lost is not unknown.** A lost track keeps dead reckoning, reported with
+  a growing sigma, and the search for a new track is confined to where that
+  leaves the aircraft (every third search still covers the whole map, in
+  case the lost track was already wrong). An untrusted track that keeps
+  rejecting matches pointing to one place gives up its belief and lets that
+  place compete for confirmation.
+* **Estimator bugs hide behind matches.** Dead reckoning without matches
+  exposed four, each of which made the error explode while the sigma
+  collapsed: old information was forgotten a little more every frame, a
+  missing odometry step at the window's edge erased the position, the
+  velocity prior pulled the odometry scale to zero, and a full step could
+  push the scale through zero. Six minutes of pure dead reckoning on either
+  flight now stays within three sigmas from every start tried.
+* **Wind turns with the aircraft.** The crab angle flips from one leg to the
+  next (yaw minus track went from +19° to −14° in one turn), so body-frame
+  velocity changes in every turn. A stiffer velocity prior left dead
+  reckoning 36 m off 10 s into a bank with a 16 m sigma; the looser one,
+  21 m.
 * **ArduPilot logs nonsense at gimbal lock.** A servo mount pointing straight
-  down logs roll -90, yaw -90 for a camera at roll 0, yaw 3: turned around in
-  half the samples of flight 2. Those samples now inherit roll and yaw.
-* **Ridges.** Along a straight field edge the correlation peak is a line,
-  and a second bump on it 70 m up-track scored as well as the truth. Each
-  match now reports its peak's spread and the filter uses it.
-* **Sync is attitude.** 0.3 s of clock error gives every frame the bank
-  angle of another moment; odometry error doubled.
-* **Banked turns.** Half the confident matches above 20° tilt were 20 m or
-  more off (likely lens distortion and attitude timing, which matter most
-  there), so only odometry
-  runs beyond 30°, with an error model that grows as 1/cos²(tilt).
-* **Look-alikes come in runs.** Two consecutive matches 0.5 s apart are one
-  observation; re-trusting a track now takes 40 m of flight, and weak matches
-  can no longer keep a wrong coasting track alive.
+  down logs roll −90, yaw −90 for a camera at roll 0, yaw 3. Those samples
+  inherit roll and yaw.
+* **Ridges.** Along a straight field edge the correlation peak is a line;
+  each match reports its peak's spread, and the estimator uses it.
+* **Sync is attitude, and so are banks.** 0.3 s of clock error gives every
+  frame the bank angle of another moment. Half the confident matches above
+  20° of bank were 20 m or more off, so only odometry runs beyond 30°, or
+  beyond 20° while rolling.
+* **Photo GPS altitude was above the ellipsoid, not sea level** (34 m, a
+  50% scale error at 100 m), and the eBee's camera attitude convention had to
+  be read from the data. The map whose season matches the flight wins.
+* **Tried and rejected:** averaging aligned score maps over several frames
+  (flight 1 live coverage 70% to 62%, misleading 0.5% to 1.4%), and a 12 m
+  trust threshold (flight 2 misleading 6.3%).
 
 ## Next steps
 
-* **Multi-frame evidence:** accumulate aligned score maps over several frames
-  and stitch frames into larger templates; this is what low-altitude footage
-  needs most.
-* **Feature scales tuned on real imagery** (canopy and lawn texture, NAIP's
-  softer resolution), validated on the Aukerman set and future flights.
-* **Terrain relief** via a free DEM (Copernicus GLO-30): rectification and
-  odometry assume flat ground, which is what limits the hilly flight below.
-* **Lens distortion:** consumer cameras need undistorting; matching is
-  turned off in steep banks partly because the distorted image edges then
-  dominate.
-* **More real flights:** a DJI MP4 + SRT gives ground truth for free; no
-  openly licensed downward-looking DJI video with its SRT was found online.
+* **Flight 2's long gaps are acquisition.** Over its valley the true place
+  stands out from noise in only 43% of frames (`pharos probe`), and minutes
+  pass without a candidate winning. Better features for low texture
+  (learned matchers behind the `Matcher` protocol) are the lever.
+* **Terrain in banks.** On flight 2 the ground a banked camera sees is 25 m
+  (rms) from the height under the aircraft; a free DEM (Copernicus GLO-30)
+  would correct odometry there. Near nadir it is only 2 to 4 m, so it is not
+  why flight 2 fails to acquire.
+* **Lens distortion:** consumer cameras need undistorting; it matters most at
+  the image edges a banked view relies on.
+* **More real flights:** a DJI MP4 + SRT gives ground truth for free.
 
 ## Layout
 
@@ -257,7 +259,7 @@ src/pharos/
   geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
   footage.py  analyze.py  telemetry.py  sync.py
   vision/   rectify, features, correlate, matcher, odometry
-  nav/      filter, localizer
+  nav/      filter, window, localizer
   sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml
   eval/     metrics, plot, bench, export
   server/   app, feeds, store, static/ (dashboard)
