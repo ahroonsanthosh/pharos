@@ -64,19 +64,29 @@ frame in `telemetry.jsonl`; the rest are skipped while decoding.
 
 ### From real hardware
 
-* **Video:** anything OpenCV/FFmpeg decodes (mp4, mov, mkv). Live feeds
-  (RTSP/UDP URLs, HDMI capture cards as `/dev/video*`) use the same `Frame`
-  interface; a streaming source is a small addition next to
-  `recording._DiskFrames`.
-* **Intrinsics:** calibrate once with a checkerboard (`cv2.calibrateCamera`)
-  and undistort frames, or use the manufacturer's values.
-* **Telemetry:** ArduPilot/PX4 `.bin`/`.ulg` logs (MAVLink `GLOBAL_POSITION_INT`,
-  `ATTITUDE`, `GIMBAL_DEVICE_ATTITUDE_STATUS`) or DJI `.SRT` subtitle files
-  carry everything needed. They have to be converted to `telemetry.jsonl` by
-  timestamp; those converters are not written yet and are the first job when
-  hardware arrives.
-* **Ground truth for free:** the GNSS position in the same logs becomes
-  `truth.jsonl`, so every real flight is also an evaluation run.
-* **Height above ground:** barometric altitude is relative to takeoff. Over
-  varying terrain, subtract a DEM (e.g. Copernicus GLO-30, free) or rely on
-  the localizer's altitude-scale estimate.
+`pharos analyze` and `pharos probe` read recorded footage directly; the
+recording format above is only needed for simulated flights.
+
+* **Video:** anything OpenCV/FFmpeg decodes (mp4, mov, mkv). Live streams and
+  capture cards are covered in [laptop.md](laptop.md). `--start`/`--end`
+  skip takeoff and landing.
+* **Telemetry:** DJI `.SRT` subtitle files (picked up next to the video),
+  ArduPilot DataFlash logs (`--log flight.bin`), or live MAVLink. PX4 `.ulg`
+  logs are not read yet.
+* **Syncing a log to a video:** camera and autopilot rarely share a clock.
+  `--log-sync` is the time from the log's first 3D GNSS fix to the first
+  video frame; find it once per flight, for example from the takeoff. A
+  small error acts like a forward camera tilt, which calibration absorbs.
+* **Calibration, once per camera:** run `pharos probe` on a flight with
+  GNSS. Its `calibration` block gives the camera's mount misalignment
+  (`--mount-offset FORWARD RIGHT`, degrees) and the scale error, both as
+  height ratio and as the equivalent field of view (`--hfov`). Lens
+  distortion is not modelled; undistort strongly distorted footage first.
+* **Ground truth for free:** the aircraft's own GNSS is never given to the
+  localizer, only used to score it, so every real flight is also an
+  evaluation run.
+* **Height above ground:** barometric height is relative to takeoff, so it
+  is wrong wherever the ground is higher or lower. ArduPilot logs with the
+  terrain database enabled give height above terrain instead. Otherwise the
+  localizer learns a constant scale error, but not terrain that changes
+  along the track; a DEM (e.g. Copernicus GLO-30, free) is the fix.

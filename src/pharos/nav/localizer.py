@@ -22,7 +22,7 @@ import numpy as np
 from pharos.geomap import GeoMap
 from pharos.geometry import Camera, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
-from pharos.types import Estimate, Fix, Frame, Status
+from pharos.types import Estimate, Fix, Frame, Status, Telemetry
 from pharos.vision.matcher import CorrelationMatcher, Matcher, MatcherConfig, SearchRegion
 from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
 
@@ -32,6 +32,10 @@ class LocalizerConfig:
     matcher: MatcherConfig = field(default_factory=MatcherConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     odometry: OdometryConfig | None = field(default_factory=OdometryConfig)  # None: off
+    # Frames from lower or with the camera tilted further from straight down are skipped:
+    # on the ground, taking off, or looking at the horizon.
+    min_altitude_m: float = 15.0
+    max_tilt_deg: float = 60.0
     # Acquisition
     prior_center: tuple[float, float] | None = None  # e.g. last GNSS fix before denial
     prior_radius_m: float = float("inf")
@@ -68,6 +72,11 @@ class LocalizerConfig:
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
     odometry_gain_range: tuple[float, float] = (0.7, 4.0)  # bounds on learned odometry noise
+
+
+def usable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
+    """Whether a frame can be matched: high enough, and not looking at the horizon."""
+    return tel.altitude >= cfg.min_altitude_m and tel.tilt <= np.radians(cfg.max_tilt_deg)
 
 
 @dataclass
@@ -121,10 +130,16 @@ class Localizer:
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
         fix = None
-        self._motion = self.odometry.step(frame, self.scale) if self.odometry else None
+        usable = usable_view(frame.telemetry, self.cfg)
+        self._motion = None
+        if self.odometry is not None:
+            if usable:
+                self._motion = self.odometry.step(frame, self.scale)
+            else:
+                self.odometry.reset()
         if self.status is Status.LOST:
             # Consecutive frames overlap heavily, so searching every frame buys little.
-            if self._frames_in_state % self.cfg.lost_search_every == 0:
+            if usable and self._frames_in_state % self.cfg.lost_search_every == 0:
                 self._acquire(frame)
             if self.status is Status.LOST:
                 self._frames_in_state += 1
@@ -137,7 +152,7 @@ class Localizer:
                     if not self._searchable(h, frame.t) and h.last_hit_xy is not None:
                         self._lost_track = (h.last_hit_t, h.last_hit_xy.copy())
                 self.hypotheses = [h for h in self.hypotheses if self._searchable(h, frame.t)]
-            fixes = [self._measure(h, frame) for h in self.hypotheses]
+            fixes = [self._measure(h, frame) if usable else None for h in self.hypotheses]
             alive = [
                 (h, f)
                 for h, f in zip(self.hypotheses, fixes, strict=True)
@@ -151,7 +166,7 @@ class Localizer:
                     self._learn(fix, frame)
             elif self.status is Status.CONVERGING:
                 self._frames_in_state += 1
-                if self._frames_in_state % self.cfg.reacquire_every == 0:
+                if usable and self._frames_in_state % self.cfg.reacquire_every == 0:
                     self._acquire(frame)
                 self._try_confirm()
             if not self.hypotheses:

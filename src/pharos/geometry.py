@@ -59,6 +59,31 @@ def camera_rotation(yaw: float, pitch: float = 0.0, roll: float = 0.0) -> np.nda
     return rot_z(-yaw) @ _NADIR @ rot_x(pitch) @ rot_y(roll)
 
 
+# Autopilots describe attitude in aerospace frames: North-East-Down world, and
+# body or gimbal axes x forward, y right, z down. A camera looking along x has
+# image right along y and image down along z.
+_NED_TO_ENU = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+_FORWARD_CAMERA = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+
+def euler_ned(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Body-to-NED rotation for aerospace (Z-Y-X) Euler angles in radians."""
+    return rot_z(yaw) @ rot_y(pitch) @ rot_x(roll)
+
+
+def camera_attitude(r_ned: np.ndarray) -> tuple[float, float, float]:
+    """Yaw, pitch and roll (as in :func:`camera_rotation`) of a camera looking
+    along the x axis of a body or gimbal frame whose orientation is ``r_ned``.
+
+    Exact for any attitude, so airframe and mount angles can be composed as
+    rotations instead of added as angles.
+    """
+    R = _NED_TO_ENU @ r_ned @ _FORWARD_CAMERA
+    yaw = np.arctan2(-R[0, 1], -R[1, 1])  # where image "up" points on the ground
+    A = _NADIR.T @ rot_z(yaw) @ R  # = rot_x(pitch) @ rot_y(roll)
+    return float(yaw), float(np.arctan2(A[2, 1], A[1, 1])), float(np.arctan2(A[0, 2], A[0, 0]))
+
+
 @dataclass(frozen=True)
 class Camera:
     """Pinhole intrinsics. Frames are assumed to be undistorted."""

@@ -4,10 +4,13 @@ import pytest
 from pharos.geometry import (
     Camera,
     apply_h,
+    camera_attitude,
     camera_rotation,
+    euler_ned,
     ground_to_image,
     image_to_ground_points,
     rot2,
+    rot_y,
     wrap_angle,
 )
 
@@ -79,3 +82,30 @@ def test_scaled_camera_keeps_geometry():
     small = CAM.scaled(0.5)
     assert (small.width, small.height) == (320, 240)
     assert np.isclose(small.fx, CAM.fx / 2)
+
+
+def test_camera_attitude_from_autopilot_frames():
+    down = rot_y(-np.pi / 2)  # a camera looking along body x, pitched down to the ground
+    d = np.radians
+    # level, heading east: a nadir view with image "up" pointing east
+    np.testing.assert_allclose(
+        camera_attitude(euler_ned(0, 0, d(90)) @ down), (d(90), 0, 0), atol=1e-9
+    )
+    # nose up: a body-fixed camera looks forward
+    np.testing.assert_allclose(
+        camera_attitude(euler_ned(0, d(5), 0) @ down), (0, d(5), 0), atol=1e-9
+    )
+    # right wing down: it looks to the left
+    np.testing.assert_allclose(
+        camera_attitude(euler_ned(d(10), 0, 0) @ down), (0, 0, -d(10)), atol=1e-9
+    )
+
+
+def test_camera_attitude_inverts_camera_rotation():
+    rng = np.random.default_rng(3)
+    ned_to_enu = np.array([[0.0, 1, 0], [1, 0, 0], [0, 0, -1]])
+    forward_camera = np.array([[0.0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    angles = rng.uniform((-3, -1, -1), (3, 1, 1), (20, 3))
+    for yaw, pitch, roll in angles:
+        r_ned = ned_to_enu.T @ camera_rotation(yaw, pitch, roll) @ forward_camera.T
+        np.testing.assert_allclose(camera_attitude(r_ned), (yaw, pitch, roll), atol=1e-9)

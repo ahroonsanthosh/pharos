@@ -2,9 +2,10 @@ import math
 import socket
 import time
 
+import numpy as np
 import pytest
 
-from pharos.telemetry import MavlinkState, SrtTelemetry, parse_dji_srt
+from pharos.telemetry import DataflashTelemetry, MavlinkState, SrtTelemetry, parse_dji_srt
 
 MODERN_SRT = """1
 00:00:00,000 --> 00:00:00,033
@@ -127,3 +128,63 @@ def test_mavlink_over_udp():
     finally:
         source.close()
         sender.close()
+
+
+# -- ArduPilot DataFlash logs (text form, which pymavlink reads like .bin) ----
+
+LOG_FORMATS = {
+    "PARM": ("QNf", "TimeUS,Name,Value"),
+    "GPS": ("QBBIHLL", "TimeUS,I,Status,GMS,GWk,Lat,Lng"),
+    "ATT": ("Qfff", "TimeUS,Roll,Pitch,Yaw"),
+    "MNT": ("QBfff", "TimeUS,I,Roll,Pitch,YawB"),
+    "POS": ("Qf", "TimeUS,RelHomeAlt"),
+    "TERR": ("QBf", "TimeUS,Status,CHeight"),
+}
+
+
+def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=True):
+    """12 s of level flight heading east, banked ``roll`` degrees; 3D fix from 2 s."""
+    lines = ["FMT, 128, 89, FMT, BBnNZ, Type,Length,Name,Format,Columns"]
+    for i, (name, (fmt, cols)) in enumerate(LOG_FORMATS.items()):
+        lines.append(f"FMT, {129 + i}, 0, {name}, {fmt}, {cols}")
+    lines.append(f"PARM, 1000, MNT1_TYPE, {mount_type}")
+    for k in range(0, 120):
+        us = k * 100_000
+        if k % 2 == 0:
+            status = 3 if us >= 2_000_000 else 1
+            lines.append(f"GPS, {us}, 0, {status}, {us // 1000}, 2400, {41.7 + k * 1e-5}, -0.7")
+        lines.append(f"ATT, {us}, {roll}, 0.0, 90.0")
+        if mount is not None:
+            lines.append(f"MNT, {us}, 0, {mount[0]}, {mount[1]}, {mount[2]}")
+        lines.append(f"POS, {us}, 100.0")
+        if terrain and k % 10 == 0:
+            lines.append(f"TERR, {us}, 2, 110.0")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_dataflash_servo_mount_sees_the_bank(tmp_path):
+    pytest.importorskip("pymavlink")
+    log = DataflashTelemetry(write_log(tmp_path / "flight.log"), sync_s=1.0)
+    sample = log.at(2.0)  # log time 5 s: first fix at 2 s, video starts 1 s later
+    tel = sample.telemetry
+    assert tel.altitude == pytest.approx(110.0)  # terrain database preferred over home
+    assert math.degrees(tel.yaw) == pytest.approx(90.0, abs=1e-4)
+    assert math.degrees(tel.pitch) == pytest.approx(0.0, abs=1e-4)
+    assert math.degrees(tel.roll) == pytest.approx(-10.0, abs=1e-4)  # no roll axis
+    assert sample.gnss == pytest.approx((41.7005, -0.7))
+    assert log.at(-4.0) is None and log.at(20.0) is None
+
+
+def test_dataflash_stabilized_gimbal_and_fixed_camera(tmp_path):
+    pytest.importorskip("pymavlink")
+    gimbal = write_log(
+        tmp_path / "gimbal.log", mount_type=6, mount=(0.0, -80.0, 0.0), terrain=False
+    )
+    tel = DataflashTelemetry(gimbal).at(1.0).telemetry
+    assert tel.altitude == pytest.approx(100.0)  # height above home
+    assert np.degrees([tel.pitch, tel.roll]) == pytest.approx([10.0, 0.0], abs=1e-4)
+
+    fixed = write_log(tmp_path / "fixed.log", mount=None, roll=0.0)
+    tel = DataflashTelemetry(fixed, mount_pitch=math.radians(15)).at(1.0).telemetry
+    assert np.degrees([tel.pitch, tel.roll]) == pytest.approx([15.0, 0.0], abs=1e-4)

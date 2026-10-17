@@ -1,4 +1,4 @@
-"""Telemetry that pairs with live or recorded footage: manual, DJI, MAVLink.
+"""Telemetry that pairs with live or recorded footage: manual, DJI, MAVLink, ArduPilot logs.
 
 Every source answers "what did the aircraft report at time t?" with the
 localizer's :class:`~pharos.types.Telemetry` (height above ground, camera
@@ -23,6 +23,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+import numpy as np
+
+from pharos.geometry import camera_attitude, euler_ned, rot_x, rot_y, rot_z
 from pharos.types import Telemetry
 
 
@@ -123,6 +126,106 @@ def parse_dji_srt(text: str) -> list[tuple[float, TelemetrySample]]:
         out.append((t, TelemetrySample(telemetry, gnss)))
     out.sort(key=lambda item: item[0])
     return out
+
+
+# -- ArduPilot DataFlash logs ------------------------------------------------
+
+_LOG_FIELDS = {
+    "GPS": ("Status", "Lat", "Lng"),
+    "ATT": ("Roll", "Pitch", "Yaw"),
+    "MNT": ("Roll", "Pitch", "YawB"),
+    "POS": ("RelHomeAlt",),
+    "TERR": ("Status", "CHeight"),
+}
+_TERRAIN_OK = 2  # TERR.Status
+
+
+class DataflashTelemetry:
+    """Telemetry for recorded video from an ArduPilot DataFlash log (``.bin``).
+
+    Camera and autopilot rarely share a clock, so ``sync_s`` places the video
+    in the log: recording started ``sync_s`` seconds after the log's first 3D
+    GNSS fix. Find it once per flight, for example from the takeoff moment.
+
+    Height above ground comes from the autopilot's terrain database
+    (``TERRAIN_ENABLE``, looked up at its own position estimate) when the log
+    has it, else from the height above home, which assumes the ground stays at
+    takeoff level.
+
+    Camera attitude composes the airframe attitude (``ATT``) with the first
+    mount (``MNT``): a servo mount (``MNT1_TYPE`` 1) logs body-frame servo
+    angles, other mounts earth-frame roll and pitch. A log without a mount
+    means a camera fixed to the airframe, looking down and tilted forward by
+    ``mount_pitch`` (radians). Reading logs needs ``pymavlink`` (``pharos[server]``).
+    """
+
+    def __init__(self, path: str | Path, sync_s: float = 0.0, mount_pitch: float = 0.0):
+        series, params = _read_dataflash(Path(path))
+        gps = series["GPS"][series["GPS"][:, 1] >= 3]
+        if not len(gps) or not len(series["ATT"]) or not len(series["POS"]):
+            raise ValueError(f"{path}: log needs GPS (with a 3D fix), ATT and POS messages")
+        self.t0 = gps[0, 0] + sync_s  # log time of video time 0
+        self._gnss = gps[:, [0, 2, 3]]
+        self._att = np.radians(series["ATT"])
+        self._att[:, 0] = series["ATT"][:, 0]
+        self._att[:, 3] = np.unwrap(self._att[:, 3])
+        terrain = series["TERR"][series["TERR"][:, 1] == _TERRAIN_OK]
+        self._height = terrain[:, [0, 2]] if len(terrain) else series["POS"]
+        mount = series["MNT"][~np.isnan(series["MNT"][:, 2])]
+        self._mount = np.column_stack([mount[:, 0], np.radians(np.nan_to_num(mount[:, 1:]))])
+        self._mount_body_frame = params.get("MNT1_TYPE") == 1
+        self.mount_pitch = mount_pitch
+
+    def at(self, t: float) -> TelemetrySample | None:
+        """Telemetry at video time ``t``; None outside the log."""
+        when = self.t0 + t
+        att = self._att
+        if not att[0, 0] <= when <= att[-1, 0]:
+            return None
+        roll, pitch, yaw = (float(np.interp(when, att[:, 0], att[:, k])) for k in (1, 2, 3))
+        body = euler_ned(roll, pitch, yaw)
+        if not len(self._mount):
+            camera = body @ rot_y(self.mount_pitch - math.pi / 2)
+        else:
+            i = max(int(np.searchsorted(self._mount[:, 0], when, side="right")) - 1, 0)
+            m_roll, m_pitch, m_yaw = self._mount[i, 1:]
+            gimbal = rot_y(m_pitch) @ rot_x(m_roll)
+            if self._mount_body_frame:
+                camera = body @ rot_z(m_yaw) @ gimbal
+            else:
+                camera = rot_z(yaw + m_yaw) @ gimbal
+        cam_yaw, tilt, side = camera_attitude(camera)
+        height = float(np.interp(when, self._height[:, 0], self._height[:, 1]))
+        gnss = None
+        if self._gnss[0, 0] <= when <= self._gnss[-1, 0]:
+            gnss = tuple(float(np.interp(when, self._gnss[:, 0], self._gnss[:, k])) for k in (1, 2))
+        return TelemetrySample(Telemetry(height, cam_yaw, tilt, side), gnss)
+
+    def close(self) -> None:
+        pass
+
+
+def _read_dataflash(path: Path) -> tuple[dict[str, np.ndarray], dict[str, float]]:
+    """Time (s) and fields of the messages in ``_LOG_FIELDS``, plus parameters."""
+    from pymavlink import mavutil  # optional dependency
+
+    log = mavutil.mavlink_connection(str(path))
+    rows: dict[str, list] = {kind: [] for kind in _LOG_FIELDS}
+    params: dict[str, float] = {}
+    try:
+        while (msg := log.recv_match(type=[*_LOG_FIELDS, "PARM"])) is not None:
+            kind = msg.get_type()
+            if kind == "PARM":
+                params[msg.Name] = msg.Value
+            elif getattr(msg, "I", 0) == 0:  # first GPS receiver and mount
+                rows[kind].append([msg.TimeUS / 1e6, *(getattr(msg, f) for f in _LOG_FIELDS[kind])])
+    finally:
+        log.close()
+    series = {
+        kind: np.array(v, dtype=float).reshape(-1, len(_LOG_FIELDS[kind]) + 1)
+        for kind, v in rows.items()
+    }
+    return series, params
 
 
 # -- MAVLink -----------------------------------------------------------------

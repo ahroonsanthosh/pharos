@@ -21,6 +21,7 @@ from pharos.nav.localizer import LocalizerConfig
 from pharos.recording import load_recording, save_recording
 from pharos.sim.flight import simulate
 from pharos.sim.scenario import builtin_scenarios, load_scenario
+from pharos.telemetry import DataflashTelemetry, SrtTelemetry
 from pharos.types import Estimate
 
 
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> None:
         "probe", help="per-frame match quality on footage with GNSS (for tuning on real data)"
     )
     _footage_args(p)
-    p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides (matcher part)")
+    p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("--every", type=int, default=1, help="use every Nth frame")
     p.add_argument("-o", "--out", type=Path, help="write per-frame rows and summary as JSON")
     p.set_defaults(func=_probe)
@@ -82,18 +83,43 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
         "--ground", type=float, help="ground height in the photos' GPS altitude reference"
     )
     p.add_argument("--srt", type=Path, help="DJI subtitle file (default: next to the video)")
+    p.add_argument("--log", type=Path, help="ArduPilot DataFlash log (.bin) of the flight")
+    p.add_argument(
+        "--log-sync",
+        type=float,
+        default=0.0,
+        help="seconds from the log's first GNSS fix to the start of the video",
+    )
+    p.add_argument("--start", type=float, default=0.0, help="video: skip to this time, seconds")
+    p.add_argument("--end", type=float, help="video: stop at this time, seconds")
+    p.add_argument(
+        "--mount-offset",
+        type=float,
+        nargs=2,
+        default=(0.0, 0.0),
+        metavar=("FORWARD", "RIGHT"),
+        help="camera tilt the telemetry misses, degrees (pharos probe measures it)",
+    )
     p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
     p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
 
 
 def _load_footage_and_map(args):
+    telemetry = None
+    if args.srt:
+        telemetry = SrtTelemetry(args.srt)
+    elif args.log:
+        telemetry = DataflashTelemetry(args.log, sync_s=args.log_sync)
     footage = load_footage(
         args.footage,
         hfov_deg=args.hfov,
         altitude_m=args.altitude,
         ground_m=args.ground,
-        srt=args.srt,
+        telemetry=telemetry,
         rate_hz=args.rate,
+        start_s=args.start,
+        end_s=args.end,
+        mount_offset_deg=tuple(args.mount_offset),
     )
     return footage, GeoMap.open(args.map).resampled(args.map_gsd)
 
@@ -118,7 +144,7 @@ def _probe(args) -> None:
     def progress(i: int, n: int, row: dict) -> None:
         print(f"\r{i}/{n}", end="", flush=True)
 
-    rows = probe(footage, geomap, _config(args.config).matcher, every=args.every, progress=progress)
+    rows = probe(footage, geomap, _config(args.config), every=args.every, progress=progress)
     print()
     summary = summarize_probe(rows)
     print(json.dumps(summary, indent=2))

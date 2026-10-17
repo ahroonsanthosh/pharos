@@ -96,7 +96,9 @@ def test_analyze_recorded_dji_video(small_sim, tmp_path):
         assert (out / name).stat().st_size > 0
 
 
-def test_probe_separates_truth_from_decoys(small_sim):
+def test_probe_separates_truth_from_decoys_and_calibrates(small_sim):
+    from dataclasses import replace
+
     from pharos.eval.probe import probe, summarize_probe
     from pharos.footage import Footage
     from pharos.recording import Recording
@@ -108,3 +110,31 @@ def test_probe_separates_truth_from_decoys(small_sim):
     assert summary["frames"] == 10
     assert summary["true_pass_1.5"] >= 0.8
     assert summary["decoy_pass_1.5"] <= 0.2
+    assert summary["calibration"]["mount_offset_deg"] == pytest.approx([0, 0], abs=0.5)
+    # the simulated barometer reads 4% high
+    assert summary["calibration"]["altitude_scale"] == pytest.approx(1 / 1.04, abs=0.02)
+
+    # telemetry that misses 3 degrees of forward camera tilt
+    tilt = math.radians(3)
+    frames = [
+        replace(f, telemetry=replace(f.telemetry, pitch=f.telemetry.pitch - tilt))
+        for f in rec.frames
+    ]
+    footage = Footage(Recording(rec.camera, frames, rec.truth), gnss)
+    calibration = summarize_probe(probe(footage, geomap, every=6))["calibration"]
+    assert calibration["mount_offset_deg"] == pytest.approx([3, 0], abs=0.7)
+
+
+def test_video_window_and_mount_offset(small_sim, tmp_path):
+    from pharos.footage import load_footage
+
+    geomap, rec = small_sim
+    video, _ = write_dji_recording(rec, geomap, tmp_path)
+    full = load_footage(video, hfov_deg=70)
+    part = load_footage(video, hfov_deg=70, start_s=5, end_s=10, mount_offset_deg=(2.0, -1.0))
+    times = [f.t for f in part.recording]
+    assert times[0] == 5.0 and times[-1] == 10.0 and len(times) == 11
+    before, after = full.recording.frames.telemetry[10], part.recording.frames.telemetry[0]
+    assert math.degrees(after.pitch - before.pitch) == pytest.approx(2.0)
+    assert math.degrees(after.roll - before.roll) == pytest.approx(-1.0)
+    assert part.gnss == full.gnss[10:21]

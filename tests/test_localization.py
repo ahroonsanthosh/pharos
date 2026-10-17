@@ -66,3 +66,22 @@ def test_track_survives_a_blackout_without_false_fixes(small_sim):
     assert any(e.status is Status.COASTING for e in estimates[24:36])
     recovered = [i for i in range(36, len(estimates)) if estimates[i].status is Status.TRACKING]
     assert recovered and recovered[0] <= 36 + 6
+
+
+def test_frames_on_the_ground_or_facing_the_horizon_are_skipped(small_sim):
+    """Takeoff in the video: no crash, no fixes, then normal tracking once airborne."""
+    from dataclasses import replace
+
+    from pharos.types import Frame
+
+    geomap, rec = small_sim
+    ground = [
+        Frame(t, rec.frames[0].image, replace(rec.frames[0].telemetry, altitude=a))
+        for t, a in ((-3.0, 0.0), (-2.5, 0.5))
+    ]
+    horizon = Frame(-2.0, rec.frames[0].image, replace(rec.frames[0].telemetry, pitch=1.3))
+    loc = Localizer(geomap, rec.camera)
+    early = [loc.process(f) for f in [*ground, horizon]]
+    assert all(e.status is Status.LOST for e in early)
+    estimates = [loc.process(f) for f in rec.frames]
+    assert estimates[-1].status is Status.TRACKING

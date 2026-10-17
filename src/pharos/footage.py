@@ -18,16 +18,17 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from pharos.geometry import Camera
 from pharos.recording import Recording
-from pharos.telemetry import SrtTelemetry, TelemetrySample
+from pharos.telemetry import SrtTelemetry, TelemetrySample, TelemetrySource
 from pharos.types import Frame, Telemetry
 
 PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
@@ -61,13 +62,37 @@ def load_footage(
     hfov_deg: float | None = None,
     altitude_m: float | None = None,
     ground_m: float | None = None,
-    srt: str | Path | None = None,
+    telemetry: TelemetrySource | None = None,
     rate_hz: float = 2.0,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+    mount_offset_deg: tuple[float, float] = (0.0, 0.0),
 ) -> Footage:
+    """Photos (a folder) or a video with ``telemetry`` (default: the DJI ``.SRT`` next to it).
+
+    ``start_s``/``end_s`` keep part of a video. ``mount_offset_deg`` (forward,
+    right) corrects a camera that points slightly off what the telemetry says
+    (``pharos probe`` measures it on footage with GNSS).
+    """
     path = Path(path)
     if path.is_dir():
-        return load_photos(path, hfov_deg=hfov_deg, altitude_m=altitude_m, ground_m=ground_m)
-    return load_video(path, hfov_deg=hfov_deg, altitude_m=altitude_m, srt=srt, rate_hz=rate_hz)
+        return load_photos(
+            path,
+            hfov_deg=hfov_deg,
+            altitude_m=altitude_m,
+            ground_m=ground_m,
+            mount_offset_deg=mount_offset_deg,
+        )
+    return load_video(
+        path,
+        hfov_deg=hfov_deg,
+        altitude_m=altitude_m,
+        telemetry=telemetry,
+        rate_hz=rate_hz,
+        start_s=start_s,
+        end_s=end_s,
+        mount_offset_deg=mount_offset_deg,
+    )
 
 
 # -- photos ------------------------------------------------------------------
@@ -79,6 +104,7 @@ def load_photos(
     hfov_deg: float | None = None,
     altitude_m: float | None = None,
     ground_m: float | None = None,
+    mount_offset_deg: tuple[float, float] = (0.0, 0.0),
 ) -> Footage:
     files = sorted(p for p in folder.iterdir() if p.suffix.lower() in PHOTO_SUFFIXES)
     if not files:
@@ -98,6 +124,7 @@ def load_photos(
     for k, info in enumerate(infos):
         telemetry.append(_photo_telemetry(info, altitude_m, ground_m))
         times.append((info.time - t0).total_seconds() if info.time and t0 else float(k))
+    telemetry = _offset(telemetry, mount_offset_deg)
     frames = _PhotoFrames([i.path for i in infos], times, telemetry, width)
     return Footage(Recording(camera, frames), [i.gnss for i in infos])
 
@@ -188,8 +215,11 @@ def load_video(
     *,
     hfov_deg: float | None = None,
     altitude_m: float | None = None,
-    srt: str | Path | None = None,
+    telemetry: TelemetrySource | None = None,
     rate_hz: float = 2.0,
+    start_s: float = 0.0,
+    end_s: float | None = None,
+    mount_offset_deg: tuple[float, float] = (0.0, 0.0),
 ) -> Footage:
     if hfov_deg is None:
         raise ValueError("pass hfov_deg for video footage")
@@ -200,56 +230,76 @@ def load_video(
     w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
-    srt_path = Path(srt) if srt else _sibling_srt(path)
-    telemetry = SrtTelemetry(srt_path) if srt_path else None
+    if telemetry is None and (srt := _sibling_srt(path)) is not None:
+        telemetry = SrtTelemetry(srt)
     if telemetry is None and altitude_m is None:
-        raise ValueError("unknown height above ground: pass altitude_m or a DJI .SRT file")
+        raise ValueError("unknown height above ground: pass altitude_m or telemetry")
 
     stride = max(round(fps / rate_hz), 1)
-    times = [i / fps for i in range(0, count, stride)]
+    last = count if end_s is None else min(count, round(end_s * fps) + 1)
+    indices = range(max(round(start_s * fps), 0), last, stride)
     samples = [
-        telemetry.at(t) if telemetry else TelemetrySample(Telemetry(altitude_m)) for t in times
+        telemetry.at(i / fps) if telemetry else TelemetrySample(Telemetry(altitude_m))
+        for i in indices
     ]
+    # Frames outside the telemetry record cannot be used.
+    kept = [(i, s) for i, s in zip(indices, samples, strict=True) if s is not None]
     width = min(w, MAX_WIDTH)
     camera = Camera.from_fov(width, round(h * width / w), hfov_deg)
-    frames = _VideoFrames(path, stride, fps, samples, width)
-    return Footage(Recording(camera, frames), [s.gnss if s else None for s in samples])
+    telemetry = _offset([s.telemetry for _, s in kept], mount_offset_deg)
+    frames = _VideoFrames(path, [i for i, _ in kept], fps, telemetry, width)
+    return Footage(Recording(camera, frames), [s.gnss for _, s in kept])
 
 
 class _VideoFrames:
-    def __init__(self, path: Path, stride: int, fps: float, samples: list, width: int):
-        self.path, self.stride, self.fps, self.samples, self.width = (
+    """Decodes the listed frame indices of a video in order, downscaled to ``width``."""
+
+    def __init__(self, path: Path, indices: list[int], fps: float, telemetry: list, width: int):
+        self.path, self.indices, self.fps, self.telemetry, self.width = (
             path,
-            stride,
+            indices,
             fps,
-            samples,
+            telemetry,
             width,
         )
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.indices)
 
     def __iter__(self) -> Iterator[Frame]:
         cap = cv2.VideoCapture(str(self.path))
         try:
-            for k, sample in enumerate(self.samples):
-                if k:
-                    for _ in range(self.stride - 1):
-                        cap.grab()
+            position = 0  # index of the next frame the decoder returns
+            for index, tel in zip(self.indices, self.telemetry, strict=True):
+                if index - position > 300:  # far ahead: seek instead of decoding everything
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+                    position = index
+                while position < index:
+                    cap.grab()
+                    position += 1
                 ok, image = cap.read()
+                position += 1
                 if not ok:
                     return
                 h, w = image.shape[:2]
                 if w != self.width:
                     size = (self.width, round(h * self.width / w))
                     image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
-                tel = sample.telemetry if sample else Telemetry(0.0)
-                yield Frame(k * self.stride / self.fps, image, tel)
+                yield Frame(index / self.fps, image, tel)
         finally:
             cap.release()
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _offset(telemetry: list[Telemetry], mount_offset_deg: tuple[float, float]) -> list[Telemetry]:
+    """Telemetry for a camera tilted (forward, right) by ``mount_offset_deg`` more than reported."""
+    if not any(mount_offset_deg):
+        return telemetry
+    forward, right = np.radians(mount_offset_deg)
+    return [replace(t, pitch=t.pitch + forward, roll=t.roll + right) for t in telemetry]
+
 
 _XMP_FIELD = re.compile(rb'([\w-]+:\w+)="([+-]?[\d.]+)"')
 # Compass heading of the camera, by vendor.

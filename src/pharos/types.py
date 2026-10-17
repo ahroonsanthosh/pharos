@@ -24,6 +24,11 @@ class Telemetry:
     pitch: float = 0.0
     roll: float = 0.0
 
+    @property
+    def tilt(self) -> float:
+        """Angle between the optical axis and straight down."""
+        return float(np.arccos(np.clip(np.cos(self.pitch) * np.cos(self.roll), -1.0, 1.0)))
+
 
 @dataclass(frozen=True)
 class Frame:
