@@ -25,7 +25,8 @@ GNSS and no learned weights, and it runs on a CPU.
 | `vision.features` | Appearance-invariant dense orientation field (see below). |
 | `vision.correlate` | Masked normalized cross-correlation via FFT; peak finding and sub-pixel refinement. |
 | `vision.matcher` | `Matcher` protocol and `CorrelationMatcher` (global and local search). |
-| `nav.filter` | Constant-velocity Kalman filter over x, y, vx, vy, heading with innovation gating. |
+| `vision.odometry` | Frame-to-frame motion: SIFT matches projected to the ground, rigid fit in metres. |
+| `nav.filter` | Kalman filter over x, y, vx, vy, heading: odometry or constant-velocity prediction, gated updates. |
 | `nav.localizer` | Multi-hypothesis acquisition, confirmation and tracking state machine. |
 | `sim.*` | Procedural world, seasonal/lighting appearance, trajectories, sensor models, rendering. |
 | `eval.*` | Metrics, track plots, scenario benchmark. |
@@ -104,6 +105,17 @@ turned around. A wrong position reported as
 trustworthy is the worst failure mode, so the benchmark tracks the
 `confident_wrong` rate separately.
 
+**Odometry as the motion model.** Consecutive frames come from the same
+camera seconds apart, so plain feature matching works between them even
+where frame-to-map matching is hard. Keypoints are projected to the ground
+with each frame's own altitude and tilt and a rigid motion is fitted in
+metres; the filter applies it along each hypothesis's own heading, so heading
+uncertainty becomes cross-track uncertainty. This keeps search windows small
+(fewer noise peaks to be fooled by), follows turns without a compass, and
+lets a confirmed track coast through stretches with nothing to match. Its
+error model is deliberately honest: attitude noise between frames shifts all
+projected points alike and cannot be separated from motion.
+
 **Self-calibration.** Accepted fixes slowly update the altitude scale (baro
 bias) and the compass offset (magnetic bias). The compass is otherwise used
 only for frame-to-frame heading changes and as a loose prior when lost.
@@ -114,8 +126,7 @@ only for frame-to-frame heading changes and as a loose prior when lost.
   (DINOv2/AnyLoc tiles) plug in by implementing `vision.matcher.Matcher`:
   `match(frame, region, scale) -> list[Fix]`. Keep them in an optional
   extra so the core stays torch-free.
-* **Visual odometry / IMU** would feed `PoseFilter.predict` with measured
-  motion instead of the constant-velocity model.
+* **IMU** rates could complement odometry in `PoseFilter.predict_motion`.
 * **Terrain relief**: rectification assumes flat ground. Over hilly terrain,
   use a DEM to rectify (and use the DEM in the simulator).
 * **Large maps**: map features are precomputed in memory per pyramid level.

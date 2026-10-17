@@ -2,7 +2,7 @@
 
 Photos carry their own metadata: capture time and GPS from EXIF, plus vendor
 XMP fields: DJI records height above takeoff and gimbal angles, senseFly
-(eBee) records the camera's compass heading.
+(eBee) records the camera's attitude and compass heading.
 GPS positions are never given to the localizer; they are only used to score
 its output.
 
@@ -49,6 +49,7 @@ class PhotoInfo:
     relative_altitude: float | None  # DJI: height above the takeoff point
     gimbal_pitch: float | None  # degrees, -90 = straight down
     gimbal_roll: float | None
+    tilt: tuple[float, float] | None  # (forward, right) degrees from nadir, if recorded
     yaw: float | None  # degrees, compass
     focal_35mm: float | None
     size: tuple[int, int]
@@ -127,6 +128,7 @@ def read_photo_info(path: Path) -> PhotoInfo:
         relative_altitude=xmp.get("drone-dji:RelativeAltitude"),
         gimbal_pitch=xmp.get("drone-dji:GimbalPitchDegree"),
         gimbal_roll=xmp.get("drone-dji:GimbalRollDegree"),
+        tilt=_sensefly_tilt(xmp),
         yaw=yaw,
         focal_35mm=float(focal) if focal else None,
         size=size,
@@ -145,12 +147,15 @@ def _photo_telemetry(info: PhotoInfo, altitude_m: float | None, ground_m: float 
             f"{info.path.name}: unknown height above ground; pass altitude_m, or ground_m "
             "(ground height in the same reference as the photos' GPS altitude)"
         )
-    pitch = 90.0 + info.gimbal_pitch if info.gimbal_pitch is not None else 0.0
+    if info.gimbal_pitch is not None:
+        forward, right = 90.0 + info.gimbal_pitch, info.gimbal_roll or 0.0
+    else:
+        forward, right = info.tilt or (0.0, 0.0)
     return Telemetry(
         altitude=altitude,
         yaw=None if info.yaw is None else math.radians(info.yaw),
-        pitch=math.radians(pitch),
-        roll=math.radians(info.gimbal_roll or 0.0),
+        pitch=math.radians(forward),
+        roll=math.radians(right),
     )
 
 
@@ -247,9 +252,21 @@ class _VideoFrames:
 # -- helpers -----------------------------------------------------------------
 
 _XMP_FIELD = re.compile(rb'([\w-]+:\w+)="([+-]?[\d.]+)"')
-# Compass heading of the camera, by vendor. senseFly also records Camera:Pitch/Roll, but
-# their sign convention is undocumented, so the camera is treated as pointing straight down.
+# Compass heading of the camera, by vendor.
 _YAW_KEYS = ("drone-dji:GimbalYawDegree", "drone-dji:FlightYawDegree", "Camera:Yaw")
+
+
+def _sensefly_tilt(xmp: dict[str, float]) -> tuple[float, float] | None:
+    """senseFly Camera:Pitch/Roll as (forward, right) tilt from nadir.
+
+    The sign convention is undocumented. It was determined from data: on the
+    OpenDroneMap Aukerman survey, pitch as recorded and roll negated is the
+    only combination for which visual odometry agrees with the photos' GPS
+    (median step error 14 m against 20 m ignoring attitude, 26-29 m otherwise).
+    """
+    if "Camera:Pitch" not in xmp or "Camera:Roll" not in xmp:
+        return None
+    return xmp["Camera:Pitch"], -xmp["Camera:Roll"]
 
 
 def _xmp_numbers(path: Path) -> dict[str, float]:

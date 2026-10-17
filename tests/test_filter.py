@@ -35,3 +35,13 @@ def test_heading_change_input_is_applied():
     kf = PoseFilter(FilterConfig(), 0.0, 0.0, 0.0, pos_sigma=3, heading_sigma=0.05)
     kf.predict(0.5, heading_change=0.3)
     assert np.isclose(kf.x[4], 0.3)
+
+
+def test_odometry_step_moves_along_heading():
+    kf = PoseFilter(FilterConfig(), 0.0, 0.0, np.pi / 2, pos_sigma=1, heading_sigma=np.radians(5))
+    kf.predict_motion(2.0, np.array([0.0, 20.0]), np.radians(10), sigma_m=1.0, sigma_heading=0.01)
+    np.testing.assert_allclose(kf.x[:2], [20.0, 0.0], atol=1e-9)  # forward = east
+    np.testing.assert_allclose(kf.x[2:4], [10.0, 0.0], atol=1e-9)  # velocity from measured rate
+    assert np.isclose(kf.x[4], np.pi / 2 + np.radians(10))
+    # heading uncertainty becomes cross-track (north-south) position uncertainty
+    assert kf.P[1, 1] > kf.P[0, 0] + 1.0

@@ -67,6 +67,37 @@ class PoseFilter:
         Q[4, 4] = q_h
         self.P = F @ self.P @ F.T + Q
 
+    def predict_motion(
+        self,
+        dt: float,
+        d_body: np.ndarray,
+        d_heading: float,
+        sigma_m: float,
+        sigma_heading: float,
+    ) -> None:
+        """Step by a measured displacement (visual odometry) instead of constant velocity.
+
+        ``d_body`` is (right, forward) in metres in the previous heading-up frame,
+        so heading uncertainty turns into cross-track position uncertainty.
+        """
+        psi = self.x[4]
+        c, s = np.cos(psi), np.sin(psi)
+        rot = np.array([[c, s], [-s, c]])  # geometry.rot2(psi)
+        d_rot = np.array([[-s, c], [-c, -s]])  # its derivative with respect to psi
+        d_world = rot @ np.asarray(d_body, float)
+        F = np.eye(5)
+        F[0:2, 4] = d_rot @ d_body
+        Q = np.zeros((5, 5))
+        Q[0, 0] = Q[1, 1] = sigma_m**2
+        Q[4, 4] = sigma_heading**2
+        self.x[0:2] += d_world
+        self.x[4] = wrap_angle(psi + d_heading)
+        if dt > 0:  # velocity is replaced by the measured rate
+            F[2:4, :] = 0.0
+            self.x[2:4] = d_world / dt
+            Q[2, 2] = Q[3, 3] = sigma_m**2 / dt**2 + self.cfg.accel_sigma**2 * dt
+        self.P = F @ self.P @ F.T + Q
+
     def innovation(self, z: np.ndarray, R: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
         nu = z - _H @ self.x
         nu[2] = wrap_angle(nu[2])

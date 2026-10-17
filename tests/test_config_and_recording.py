@@ -15,6 +15,9 @@ def test_nested_config_and_tuples():
     assert sc.flight_look.white_balance == (1, 1, 0.9)
     cfg = from_dict(LocalizerConfig, {"matcher": {"scales": [1.0]}, "max_coast_s": 3.0})
     assert cfg.matcher.scales == (1.0,)
+    cfg = from_dict(LocalizerConfig, {"odometry": {"min_inliers": 30}})
+    assert cfg.odometry.min_inliers == 30
+    assert from_dict(LocalizerConfig, {"odometry": None}).odometry is None
 
 
 def test_unknown_keys_are_rejected():

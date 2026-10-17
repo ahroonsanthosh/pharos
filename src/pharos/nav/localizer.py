@@ -24,12 +24,14 @@ from pharos.geometry import Camera, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
 from pharos.types import Estimate, Fix, Frame, Status
 from pharos.vision.matcher import CorrelationMatcher, Matcher, MatcherConfig, SearchRegion
+from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
 
 
 @dataclass(frozen=True)
 class LocalizerConfig:
     matcher: MatcherConfig = field(default_factory=MatcherConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
+    odometry: OdometryConfig | None = field(default_factory=OdometryConfig)  # None: off
     # Acquisition
     prior_center: tuple[float, float] | None = None  # e.g. last GNSS fix before denial
     prior_radius_m: float = float("inf")
@@ -47,7 +49,8 @@ class LocalizerConfig:
     track_min_score: float = 0.18
     track_min_excess: float = 1.5  # a match must stand out from its window's noise
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
-    max_coast_s: float = 8.0  # a confirmed track is dropped after this long without a match
+    max_coast_s: float = 8.0  # a confirmed track is dropped after this long without a match,
+    max_coast_sigma_m: float = 30.0  # unless odometry keeps its uncertainty below this
     trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
     meas_sigma_m: float = 3.0
     meas_heading_sigma_deg: float = 2.0
@@ -57,6 +60,7 @@ class LocalizerConfig:
     min_heading_span_deg: float = 6.0  # at least three fine heading steps
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
+    odometry_gain_range: tuple[float, float] = (0.7, 4.0)  # bounds on learned odometry noise
 
 
 @dataclass
@@ -88,9 +92,16 @@ class Localizer:
         self.cfg = cfg or LocalizerConfig()
         self.map = geomap
         self.matcher = matcher or CorrelationMatcher(geomap, camera, self.cfg.matcher)
+        odometry = self.cfg.odometry
+        self.odometry = VisualOdometry(camera, odometry) if odometry is not None else None
+        self._motion: Motion | None = None
         self.status = Status.LOST
         self.hypotheses: list[_Hypothesis] = []
         self.scale = 1.0  # running estimate of true / reported altitude
+        # Odometry error varies by platform (a banking fixed-wing vs a stabilized
+        # gimbal), so confirmed tracks learn a factor on its stated uncertainty.
+        self.odometry_gain = 1.0
+        self._odometry_nis = 2.0  # running normalized innovation; 2 when the model fits
         self.compass_offset = 0.0  # running estimate of true heading - compass
         self._frames_in_state = 0
         self._last_t: float | None = None
@@ -99,6 +110,7 @@ class Localizer:
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
         fix = None
+        self._motion = self.odometry.step(frame, self.scale) if self.odometry else None
         if self.status is Status.LOST:
             # Consecutive frames overlap heavily, so searching every frame buys little.
             if self._frames_in_state % self.cfg.lost_search_every == 0:
@@ -115,7 +127,7 @@ class Localizer:
             alive = [
                 (h, f)
                 for h, f in zip(self.hypotheses, fixes, strict=True)
-                if frame.t - h.last_hit_t <= limit
+                if frame.t - h.last_hit_t <= limit or self._coasting_ok(h)
             ]
             self.hypotheses = [h for h, _ in alive]
             if self.status is Status.TRACKING and alive:
@@ -199,7 +211,12 @@ class Localizer:
         cfg, kf = self.cfg, h.filter
         dt = frame.t - self._last_t if self._last_t is not None else 0.0
         yaw, last = frame.telemetry.yaw, self._last_yaw
-        kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
+        m = self._motion
+        if m is not None:
+            g = self.odometry_gain
+            kf.predict_motion(dt, m.d_body, m.d_heading, g * m.sigma_m, g * m.sigma_heading)
+        else:
+            kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
 
         region = SearchRegion(
             center=(float(kf.x[0]), float(kf.x[1])),
@@ -224,8 +241,12 @@ class Localizer:
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
             R = np.diag([cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, sigma_h**2])
-            if not kf.update(np.array([fix.x, fix.y, fix.heading]), R):
+            z = np.array([fix.x, fix.y, fix.heading])
+            nu, S, _ = kf.innovation(z, R)
+            if not kf.update(z, R):
                 fix = None
+            elif m is not None and self.status is Status.TRACKING:
+                self._learn_odometry(float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2])))
         h.scores.append(fix.score if fix is not None else 0.0)
         if fix is not None:
             if h.last_hit_xy is not None:
@@ -235,11 +256,29 @@ class Localizer:
 
     # -- helpers ----------------------------------------------------------
 
+    def _coasting_ok(self, h: _Hypothesis) -> bool:
+        """A confirmed track may coast on odometry while its uncertainty stays small."""
+        return (
+            self.status is Status.TRACKING
+            and self._motion is not None
+            and h.filter.pos_sigma <= self.cfg.max_coast_sigma_m
+        )
+
     def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
         try:
             return self.matcher.match(frame, region, self.scale)
         except ValueError:  # e.g. camera tilted above the horizon
             return []
+
+    def _learn_odometry(self, nis: float) -> None:
+        """Scale odometry's uncertainty so position innovations look as expected (chi2, 2 dof)."""
+        a = self.cfg.smoothing
+        self._odometry_nis += a * (min(nis, 20.0) - self._odometry_nis)
+        lo, hi = self.cfg.odometry_gain_range
+        target = self.odometry_gain * np.sqrt(self._odometry_nis / 2.0)
+        self.odometry_gain = float(
+            np.clip(self.odometry_gain + a * (target - self.odometry_gain), lo, hi)
+        )
 
     def _learn(self, fix: Fix, frame: Frame) -> None:
         """Slowly track altitude bias and compass offset from confirmed fixes."""

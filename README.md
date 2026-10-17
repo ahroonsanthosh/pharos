@@ -63,8 +63,9 @@ pharos serve --open                        # dashboard without Docker
    set of heading and altitude-scale hypotheses.
 4. **Localize.** When lost, a global search proposes candidates. Several are
    followed in parallel until one clearly wins over 120 m of flight. After
-   that, a Kalman filter tracks with cheap local searches and slowly learns
-   barometric and compass bias.
+   that, a Kalman filter tracks with cheap local searches, driven by visual
+   odometry between consecutive frames, and slowly learns barometric and
+   compass bias.
 
 Each estimate carries a status: `lost`, `converging` (a candidate, not yet
 trustworthy) or `tracking`. Details and design rationale are in
@@ -86,18 +87,18 @@ initial position) against a summer reference map:
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | <10 m | wrong | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 82% | 10.5 | 1.4 | 2.8 | 0.4 | 82% | 0.0% | 224 |
-| autumn_low_sun | 83% | 10.0 | 1.9 | 4.2 | 0.4 | 83% | 0.0% | 221 |
-| dusk_haze | 84% | 9.5 | 2.8 | 21.1 | 0.8 | 73% | 0.0% | 227 |
-| grid_farmland | 83% | 10.0 | 1.6 | 3.2 | 0.4 | 83% | 0.0% | 234 |
-| kitchen_sink | 83% | 10.0 | 2.7 | 6.2 | 1.2 | 82% | 0.0% | 860 |
-| land_change | 83% | 10.0 | 2.3 | 3.8 | 0.5 | 83% | 0.0% | 274 |
-| no_compass_spinning | 83% | 10.0 | 1.1 | 2.7 | 0.1 | 83% | 0.0% | 779 |
-| nominal | 84% | 9.5 | 1.4 | 2.5 | 0.3 | 84% | 0.0% | 261 |
-| sensor_errors | 82% | 10.5 | 6.8 | 8.8 | 0.4 | 82% | 0.0% | 213 |
-| spring_clouds_on_map | 58% | 10.0 | 3.1 | 8.6 | 0.7 | 57% | 0.0% | 238 |
-| tilted_camera | 83% | 10.0 | 1.0 | 2.6 | 0.4 | 83% | 0.0% | 202 |
-| winter_snow | 53% | 28.0 | 1.7 | 3.2 | 0.5 | 53% | 0.0% | 217 |
+| altitude_bias | 84% | 9.5 | 1.9 | 4.3 | 0.1 | 84% | 0.0% | 367 |
+| autumn_low_sun | 84% | 9.5 | 2.4 | 5.7 | 0.2 | 84% | 0.0% | 379 |
+| dusk_haze | 84% | 9.5 | 3.0 | 21.1 | 0.8 | 73% | 0.0% | 364 |
+| grid_farmland | 85% | 9.0 | 2.0 | 4.6 | 0.2 | 85% | 0.0% | 320 |
+| kitchen_sink | 84% | 9.5 | 2.7 | 5.4 | 0.9 | 84% | 0.0% | 266 |
+| land_change | 84% | 9.5 | 2.7 | 5.1 | 0.1 | 84% | 0.0% | 311 |
+| no_compass_spinning | 84% | 9.5 | 2.2 | 3.6 | 0.1 | 84% | 0.0% | 293 |
+| nominal | 85% | 9.0 | 1.9 | 3.9 | 0.1 | 85% | 0.0% | 312 |
+| sensor_errors | 84% | 9.5 | 7.0 | 9.7 | 0.2 | 81% | 0.0% | 353 |
+| spring_clouds_on_map | 72% | 9.5 | 3.3 | 9.0 | 0.6 | 72% | 0.0% | 345 |
+| tilted_camera | 85% | 9.0 | 1.7 | 3.6 | 0.1 | 85% | 0.0% | 307 |
+| winter_snow | 69% | 18.5 | 2.3 | 4.3 | 0.2 | 69% | 0.0% | 238 |
 <!-- bench:end -->
 
 Columns: share of frames in `tracking`, time to first confirmed fix, median
@@ -106,11 +107,11 @@ share of all frames within 10 m, share of tracking frames more than 25 m off
 (confidently wrong), and median processing time per frame with four scenarios
 running in parallel on a 4-core CPU.
 
-Availability tops out near 83% because a candidate must cover 120 m of new
+Availability tops out near 85% because a candidate must cover 120 m of new
 ground (about 10 s) before it is trusted. Lower rows are informative:
-`spring_clouds_on_map` flies under clouds baked into the reference map and
-correctly reports lost there; `winter_snow` needs longer to find a
-distinctive start under the stricter gate that real imagery required; `sensor_errors` shows that a 2° camera mount
+`spring_clouds_on_map` flies under clouds baked into the reference map, where
+odometry carries the track part of the way; `winter_snow` needs longer to
+find a distinctive start under the stricter gate that real imagery required; `sensor_errors` shows that a 2° camera mount
 misalignment becomes a ~6 m bias that no single frame can reveal; the
 `dusk_haze` tail is one turn over forest where the filter coasts straight.
 
@@ -122,28 +123,38 @@ lower and treat these numbers as an upper bound until validated on flights.
 
 Public test data, all free: OpenDroneMap's *Aukerman* survey (CC0): 77 nadir
 photos from a senseFly eBee fixed-wing at about 100 m, June 2016, with GPS.
-It was matched against USGS NAIP imagery from 2015, 2019 and 2023, with no
-initial position given.
+It is matched against USGS NAIP imagery from three years, with no initial
+position given:
 
-* **Safety:** after adding a window-corrected peak statistic, no frame was
-  confidently wrong. Before that, several runs confirmed look-alike places
-  0.7 to 1.4 km away. This is the result that matters most.
-* **Accuracy when confident:** about 9 m median against the photos' GPS.
-* **Coverage: poor, about 4% of frames.** This survey is a hard case: low
-  altitude (each photo covers only ~140 m), tight loops with 4 to 13 s
-  between photos, mostly lawn and trees, and the house and path in the photos
-  were built after the 2015 imagery.
-* Two real-world traps turned up and are now handled: photo GPS altitudes
-  above the WGS84 ellipsoid rather than sea level (34 m here, i.e. a 50%
-  scale error at this altitude), and vendor-specific attitude metadata.
+| reference map | frames trusted | median error | 95th pct | confidently wrong |
+|---|---:|---:|---:|---:|
+| NAIP 2015 (July, 1 m) | 39% | 11 m | 19 m | 0% |
+| NAIP 2019 (October) | 18% | 12 m | 19 m | 0% |
+| NAIP 2023 (May) | 31% | 11 m | 19 m | 0% |
 
-Raising coverage on footage like this is the next milestone (see below).
+Errors are measured against the photos' own GPS (about 1.5 m accurate). How
+it got here, and what this footage taught:
+
+* The first version confirmed look-alike places 0.7 to 1.4 km away. Real
+  photos match far more weakly than synthetic ones (0.2 to 0.6 vs 0.8 to
+  0.9), so fixed score thresholds were unsafe. Matches are now judged
+  against the noise of their own search window.
+* Visual odometry between photos replaced the constant-velocity guess (it
+  needed windows up to 150 m with 4 to 13 s between photos). Its error
+  differs by platform (a banking fixed-wing is far noisier than a gimbal), so
+  confirmed tracks calibrate it from their own innovations. Together this
+  raised coverage from 0 to 4% to 18 to 39%.
+* Photo GPS altitude was above the WGS84 ellipsoid, not sea level: 34 m, a
+  50% scale error at this altitude. The eBee's camera attitude is recorded,
+  but its sign convention had to be determined from the data.
+* The map whose season matches the flight wins, even though it predates a
+  house and path visible in the photos.
+
+This survey is a hard case (low altitude, tight loops, mostly lawn and
+trees). Coverage is the open problem; see below.
 
 ## Next steps
 
-* **Visual odometry** between consecutive frames as the motion model: small
-  search windows instead of 150 m guesses, real distance for confirmation,
-  coasting through featureless stretches.
 * **Multi-frame evidence:** accumulate aligned score maps over several frames
   and stitch frames into larger templates; this is what low-altitude footage
   needs most.
@@ -162,7 +173,7 @@ Raising coverage on footage like this is the next milestone (see below).
 src/pharos/
   geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
   footage.py  analyze.py  telemetry.py
-  vision/   rectify, features, correlate, matcher
+  vision/   rectify, features, correlate, matcher, odometry
   nav/      filter, localizer
   sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml
   eval/     metrics, plot, bench, export

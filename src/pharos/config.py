@@ -23,13 +23,20 @@ def from_dict(cls: type[T], data: Mapping[str, Any] | None) -> T:
     hints = typing.get_type_hints(cls)
     kwargs = {}
     for key, value in data.items():
-        kind = hints[key]
-        if dataclasses.is_dataclass(kind) and isinstance(value, Mapping):
+        kind = _dataclass_in(hints[key])
+        if kind is not None and isinstance(value, Mapping):
             value = from_dict(kind, value)
         elif isinstance(value, list):
             value = tuple(value)
         kwargs[key] = value
     return cls(**kwargs)
+
+
+def _dataclass_in(hint):
+    """The dataclass in a field type, including ``X | None``; else None."""
+    if dataclasses.is_dataclass(hint):
+        return hint
+    return next((a for a in typing.get_args(hint) if dataclasses.is_dataclass(a)), None)
 
 
 def load_yaml(cls: type[T], path: str | Path) -> T:
