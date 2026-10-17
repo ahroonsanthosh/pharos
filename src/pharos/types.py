@@ -55,6 +55,7 @@ class Fix:
     score: float  # similarity of the best match, in [0, 1]
     distinctiveness: float  # 1 - second_best / best, in [0, 1]
     scale: float = 1.0  # correction factor applied to the reported altitude
+    excess: float = 0.0  # peak height above its window's noise (see correlate.peak_excess)
 
 
 class Status(StrEnum):

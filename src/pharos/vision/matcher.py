@@ -12,7 +12,13 @@ import numpy as np
 from pharos.geomap import GeoMap
 from pharos.geometry import Camera, rot2, wrap_angle
 from pharos.types import Fix, Frame
-from pharos.vision.correlate import Correlator, find_peaks, parabola_offset, subpixel
+from pharos.vision.correlate import (
+    Correlator,
+    find_peaks,
+    parabola_offset,
+    peak_excess,
+    subpixel,
+)
 from pharos.vision.features import FeatureConfig, orientation_field
 from pharos.vision.rectify import Footprint, disk_mask, footprint, nadir_from_patch_center, rectify
 
@@ -160,7 +166,8 @@ class CorrelationMatcher:
         _, gsd = self._features(cfg.fine_level)
         peaks = find_peaks(res.best, 2, max(int(cfg.sidelobe_m / gsd), 2))
         s2 = peaks[1][2] if len(peaks) > 1 else 0.0
-        return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est)
+        excess = peak_excess(res.best, r, c, rho=2 * cfg.features.smooth)
+        return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est, excess)
 
     def _search(self, gray, frame, level, center, radius, headings, scales, keep) -> _Search | None:
         tel = frame.telemetry
@@ -285,5 +292,5 @@ def _with_distinctiveness(fixes: list[Fix], separation: float) -> list[Fix]:
             )
         ]
         d = _distinct(f.score, max(rivals, default=0.0))
-        out.append(Fix(f.x, f.y, f.heading, f.score, d, f.scale))
+        out.append(Fix(f.x, f.y, f.heading, f.score, d, f.scale, f.excess))
     return out

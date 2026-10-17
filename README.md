@@ -25,6 +25,22 @@ the aircraft reports GPS, it is drawn next to the visual estimate, so every
 real flight measures accuracy. Setup for each source is in
 [docs/laptop.md](docs/laptop.md).
 
+## Analyze recorded footage
+
+The same engine works on archives, not just live feeds: patrol logs, survey
+photo sets, old flight videos. Footage is processed as fast as the CPU allows.
+
+```bash
+pharos analyze DJI_0042.MP4 --map area.tif --hfov 70        # .SRT next to the video is used
+pharos analyze photos/ --map area.tif                       # EXIF GPS/time, DJI or senseFly XMP
+pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry at all
+```
+
+It writes `track.geojson`, `track.kml` (opens in Google Earth), `track.csv`,
+an overview image, and `summary.json`. When the footage carries its own GPS,
+the summary scores Pharos against it. The dashboard offers the same exports
+for every feed, live or recorded, and accepts photo sets as well as videos.
+
 ## Develop
 
 ```bash
@@ -101,16 +117,42 @@ The simulator is still kinder than reality (flat ground, the map and the
 drone view share exact geometry). Expect real cross-season match scores to be
 lower and treat these numbers as an upper bound until validated on flights.
 
+## First real-imagery test
+
+Public test data, all free: OpenDroneMap's *Aukerman* survey (CC0): 77 nadir
+photos from a senseFly eBee fixed-wing at about 100 m, June 2016, with GPS.
+It was matched against USGS NAIP imagery from 2015, 2019 and 2023, with no
+initial position given.
+
+* **Safety:** after adding a window-corrected peak statistic, no frame was
+  confidently wrong. Before that, several runs confirmed look-alike places
+  0.7 to 1.4 km away. This is the result that matters most.
+* **Accuracy when confident:** about 9 m median against the photos' GPS.
+* **Coverage: poor, about 4% of frames.** This survey is a hard case: low
+  altitude (each photo covers only ~140 m), tight loops with 4 to 13 s
+  between photos, mostly lawn and trees, and the house and path in the photos
+  were built after the 2015 imagery.
+* Two real-world traps turned up and are now handled: photo GPS altitudes
+  above the WGS84 ellipsoid rather than sea level (34 m here, i.e. a 50%
+  scale error at this altitude), and vendor-specific attitude metadata.
+
+Raising coverage on footage like this is the next milestone (see below).
+
 ## Next steps
 
-* **Real-flight validation:** a DJI MP4 + SRT or an ArduPilot log with video
-  gives ground truth for free; converters for raw flight logs come first.
-* **Visual odometry** between consecutive frames to coast through
-  featureless stretches and turns, and to make mount misalignment observable.
+* **Visual odometry** between consecutive frames as the motion model: small
+  search windows instead of 150 m guesses, real distance for confirmation,
+  coasting through featureless stretches.
+* **Multi-frame evidence:** accumulate aligned score maps over several frames
+  and stitch frames into larger templates; this is what low-altitude footage
+  needs most.
+* **Feature scales tuned on real imagery** (canopy and lawn texture, NAIP's
+  softer resolution), validated on the Aukerman set and future flights.
+* **More real flights:** a DJI MP4 + SRT gives ground truth for free.
 * **Calibration helpers** for camera mount offset and video delay, run once
   on a flight with GPS.
-* **Peak-quality measurement model** (peak-to-sidelobe ratio, curvature-based
-  uncertainty) so thresholds transfer from simulation to real imagery.
+* **Uncertainty from the correlation peak** (its curvature) instead of a
+  fixed measurement error.
 * **Terrain relief** via a free DEM (Copernicus GLO-30) for hilly areas.
 
 ## Layout
@@ -118,11 +160,12 @@ lower and treat these numbers as an upper bound until validated on flights.
 ```
 src/pharos/
   geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
+  footage.py  analyze.py  telemetry.py
   vision/   rectify, features, correlate, matcher
   nav/      filter, localizer
   sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml
-  eval/     metrics, plot, bench
-  server/   app, feeds, telemetry, store, static/ (dashboard)
+  eval/     metrics, plot, bench, export
+  server/   app, feeds, store, static/ (dashboard)
 docs/       laptop setup, architecture, data sources
 tests/
 Dockerfile  compose.yaml

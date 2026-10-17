@@ -29,7 +29,9 @@ GNSS and no learned weights, and it runs on a CPU.
 | `nav.localizer` | Multi-hypothesis acquisition, confirmation and tracking state machine. |
 | `sim.*` | Procedural world, seasonal/lighting appearance, trajectories, sensor models, rendering. |
 | `eval.*` | Metrics, track plots, scenario benchmark. |
-| `server.*` | Live service: feed runner (any video source + telemetry), MAVLink and DJI SRT telemetry, map store, FastAPI app and dashboard. |
+| `telemetry` | Manual, DJI `.SRT` and live MAVLink telemetry sources. |
+| `footage`, `analyze` | Recorded videos and photo sets (EXIF, DJI and senseFly XMP) localized offline, with exports. |
+| `server.*` | Live service: feed runner (any video source + telemetry), map store, FastAPI app and dashboard. |
 | `cli` | `pharos simulate`, `pharos localize`, `pharos bench`, `pharos serve`. |
 
 ## Conventions
@@ -81,6 +83,15 @@ heading/scale hypothesis costs one forward and one inverse FFT.
 compass, then refines the best candidates at full resolution. When tracking,
 it searches a window sized from the filter covariance, over a few headings
 around the prediction and three altitude-scale hypotheses.
+
+**Judge peaks against their own window.** A raw correlation score does not
+transfer between domains: synthetic frames score 0.8 to 0.9 at the true place,
+real photos 0.2 to 0.6, while the best noise peak in a 150 m search window
+already reaches 0.25 to 0.3. Every match is therefore scored by how far its
+peak stands above the score distribution of its own window, minus what the
+best of that many noise samples would reach (`correlate.peak_excess`). On the
+real Aukerman photos this passes 74% of true windows and 10% of wrong ones per
+frame, and confirmation needs several in a row.
 
 **Multiple hypotheses before commitment.** Consecutive frames overlap almost
 entirely, so a look-alike place that fools one frame fools the next several

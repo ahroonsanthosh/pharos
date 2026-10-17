@@ -1,7 +1,13 @@
 import cv2
 import numpy as np
 
-from pharos.vision.correlate import Correlator, find_peaks, parabola_offset, subpixel
+from pharos.vision.correlate import (
+    Correlator,
+    find_peaks,
+    parabola_offset,
+    peak_excess,
+    subpixel,
+)
 from pharos.vision.features import orientation_field
 from pharos.vision.rectify import disk_mask
 
@@ -52,3 +58,14 @@ def test_peaks_respect_min_distance():
 def test_parabola_offset():
     assert parabola_offset(1.0, 2.0, 1.0) == 0.0
     assert 0 < parabola_offset(0.0, 1.0, 0.9) <= 0.5
+
+
+def test_peak_excess_separates_signal_from_window_noise():
+    rng = np.random.default_rng(4)
+    noise = cv2.GaussianBlur(rng.standard_normal((120, 120)).astype(np.float32), (0, 0), 2)
+    noise = 0.25 + 0.05 * noise / noise.std()
+    r, c = np.unravel_index(noise.argmax(), noise.shape)
+    assert peak_excess(noise, r, c, rho=5) < 1.0  # the best noise peak is unremarkable
+    signal = noise.copy()
+    signal[60, 60] = 0.6
+    assert peak_excess(signal, 60, 60, rho=5) > 3.0

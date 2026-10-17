@@ -80,6 +80,27 @@ def find_peaks(score: np.ndarray, k: int, min_distance: int) -> list[tuple[int, 
     return peaks
 
 
+def peak_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
+    """How far the peak at ``(r, c)`` stands above the noise of its own search window.
+
+    The peak's robust z-score against all offsets outside its main lobe, minus
+    the z expected for the best of ``N`` independent noise samples (``N`` = valid
+    area / correlation area, ``rho`` the correlation length in pixels). Unlike
+    the raw score this does not depend on how much texture the scene has or on
+    how large the window is, so the same threshold works in simulation and on
+    real imagery. Above ~1.5 a peak is unlikely to be noise.
+    """
+    yy, xx = np.ogrid[: score.shape[0], : score.shape[1]]
+    far = ((yy - r) ** 2 + (xx - c) ** 2 > (3 * rho) ** 2) & (score > -1)
+    if far.sum() < 20:
+        return 0.0
+    vals = score[far]
+    mu = float(np.median(vals))
+    sigma = 1.4826 * float(np.median(np.abs(vals - mu))) + 1e-6
+    n_eff = max(far.sum() / (np.pi * rho**2), 2.0)
+    return float((score[r, c] - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
+
+
 def subpixel(score: np.ndarray, r: int, c: int) -> tuple[float, float]:
     """Refine an integer peak with a separable parabola fit."""
     dr = _parabola(score, (r - 1, c), (r, c), (r + 1, c))

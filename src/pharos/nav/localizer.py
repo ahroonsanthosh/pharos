@@ -45,6 +45,7 @@ class LocalizerConfig:
     confirm_margin: float = 0.06  # mean-score lead over the runner-up
     # Tracking
     track_min_score: float = 0.18
+    track_min_excess: float = 1.5  # a match must stand out from its window's noise
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
     max_coast_s: float = 8.0  # a confirmed track is dropped after this long without a match
     trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
@@ -215,7 +216,11 @@ class Localizer:
             ),
         )
         fixes = self._match(frame, region)
-        fix = fixes[0] if fixes and fixes[0].score >= cfg.track_min_score else None
+        fix = fixes[0] if fixes else None
+        if fix is not None and (
+            fix.score < cfg.track_min_score or fix.excess < cfg.track_min_excess
+        ):
+            fix = None
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
             R = np.diag([cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, sigma_h**2])

@@ -116,6 +116,16 @@ drawn in green and gives you the accuracy of every flight.
   to 1.5 s through a streaming pipeline. Set it once on a flight that has
   GPS: pick the value that minimizes *Error vs GNSS*.
 
+### Archived footage and photo sets
+
+Choose **Recorded video or photos** and select either one video or many
+photos. Photos bring their own GPS, time and, for DJI and senseFly, height
+and heading. Recorded footage runs as fast as the laptop allows, not in real
+time. From a terminal the same thing is `pharos analyze` (see the README).
+
+Every feed, live or recorded, can be downloaded as **GeoJSON**, **KML**
+(Google Earth) or **CSV** from the links under the readout.
+
 ### HDMI capture card or webcam
 
 Choose **Camera or capture card (through this browser)**. The browser
@@ -139,6 +149,8 @@ ffmpeg -re -i flight.mp4 -c:v libx264 -tune zerolatency -f flv rtmp://localhost:
   as the drone moves. Don't trust these yet.
 * **tracking**: one location won over at least 120 m of flight. Positions are
   shown with a 1-sigma uncertainty circle.
+* **coasting**: was tracking, but recent frames did not match; the position
+  is dead reckoning and its uncertainty is growing.
 * **lost**: no confident match (over featureless ground, or before the first
   fix). Pharos says so instead of guessing.
 * **Error vs GNSS** appears whenever the aircraft reports its own GPS.
