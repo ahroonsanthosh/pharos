@@ -106,37 +106,38 @@ Twelve scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight at
 initial position) against a summer reference map:
 
 <!-- bench:start -->
-| scenario | avail | fix s | err50 m | err95 m | hdg deg | <10 m | wrong | ms/frame |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.9 | 4.4 | 0.1 | 84% | 0.0% | 335 |
-| autumn_low_sun | 84% | 9.5 | 2.4 | 5.6 | 0.2 | 84% | 0.0% | 358 |
-| dusk_haze | 84% | 9.5 | 2.9 | 21.9 | 0.8 | 72% | 0.0% | 344 |
-| grid_farmland | 85% | 9.0 | 2.0 | 4.6 | 0.2 | 85% | 0.0% | 251 |
-| kitchen_sink | 60% | 9.5 | 3.0 | 7.3 | 1.0 | 60% | 0.0% | 321 |
-| land_change | 84% | 9.5 | 2.6 | 5.0 | 0.2 | 84% | 0.0% | 319 |
-| no_compass_spinning | 84% | 9.5 | 2.2 | 3.6 | 0.1 | 84% | 0.0% | 315 |
-| nominal | 85% | 9.0 | 1.9 | 3.9 | 0.1 | 85% | 0.0% | 299 |
-| sensor_errors | 84% | 9.5 | 7.0 | 9.7 | 0.1 | 82% | 0.0% | 298 |
-| spring_clouds_on_map | 62% | 9.5 | 2.8 | 6.9 | 0.5 | 62% | 0.0% | 323 |
-| tilted_camera | 85% | 9.0 | 1.7 | 3.6 | 0.1 | 85% | 0.0% | 286 |
-| winter_snow | 69% | 18.5 | 2.2 | 4.3 | 0.2 | 69% | 0.0% | 338 |
+| scenario | avail | fix s | err50 m | err95 m | hdg deg | cover | mislead | gap s | in 3 sd | ms/frame |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| altitude_bias | 84% | 9.5 | 1.3 | 3.1 | 0.1 | 84% | 0.0% | 10 | 100% | 195 |
+| autumn_low_sun | 84% | 9.5 | 2.0 | 4.2 | 0.1 | 84% | 0.0% | 10 | 100% | 217 |
+| dusk_haze | 66% | 10.0 | 2.1 | 8.6 | 0.9 | 66% | 0.0% | 10 | 99% | 216 |
+| grid_farmland | 85% | 9.0 | 1.6 | 3.5 | 0.2 | 85% | 0.0% | 9 | 100% | 179 |
+| kitchen_sink | 68% | 9.5 | 2.3 | 5.3 | 0.6 | 68% | 0.0% | 10 | 100% | 163 |
+| land_change | 84% | 9.5 | 2.2 | 3.5 | 0.1 | 84% | 0.0% | 10 | 100% | 195 |
+| no_compass_spinning | 84% | 9.5 | 2.0 | 3.9 | 0.1 | 84% | 0.0% | 10 | 100% | 179 |
+| nominal | 85% | 9.0 | 1.4 | 2.4 | 0.1 | 85% | 0.0% | 9 | 100% | 167 |
+| sensor_errors | 84% | 9.5 | 6.7 | 8.8 | 0.3 | 84% | 0.0% | 10 | 100% | 152 |
+| spring_clouds_on_map | 56% | 9.5 | 2.4 | 5.5 | 0.4 | 56% | 0.0% | 17 | 100% | 156 |
+| tilted_camera | 85% | 9.0 | 1.2 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 165 |
+| winter_snow | 69% | 18.5 | 1.6 | 2.8 | 0.1 | 69% | 0.0% | 18 | 100% | 181 |
 <!-- bench:end -->
 
-Columns: share of frames in `tracking`, time to first confirmed fix, median
-and 95th-percentile position error while tracking, median heading error,
-share of all frames within 10 m, share of tracking frames more than 25 m off
-(confidently wrong), and median processing time per frame on a fully loaded
-4-core CPU.
+Columns: share of frames trusted (`tracking`), time to first confirmed
+fix, median and 95th-percentile error of trusted positions, median heading
+error, accurate coverage (trusted and within 25 m) and the misleading rate
+(trusted and further off), both over all frames, the longest stretch without
+a trusted position, the share of trusted positions within three reported
+sigmas, and median processing time per frame on a loaded 4-core CPU.
 
-Availability tops out near 85% because a candidate must cover 120 m of new
-ground (about 10 s) before it is trusted. Lower rows are informative:
-`spring_clouds_on_map` and `kitchen_sink` lose frames to the stricter rules
-real video required (a coasting track must fly 40 m on consecutive stronger
-matches before it is trusted again, and is dropped after 30 s); they report
-those frames as coasting, not wrong. `winter_snow` needs longer to find a
-distinctive start; `sensor_errors` shows that a 2° camera mount
-misalignment becomes a ~6 m bias that no single frame can reveal; the
-`dusk_haze` tail is one turn over forest where the filter coasts straight.
+No scenario reports a wrong position as trusted, and reported uncertainties
+hold. Coverage tops out near 85% because a candidate must cover 120 m of new
+ground (about 10 s) before it is trusted. Lower rows report the missing
+frames as coasting, not wrong: in `spring_clouds_on_map`, `kitchen_sink` and
+`dusk_haze`, clouds on the map, haze and forest leave stretches where too
+little matches for a 10 m uncertainty; `winter_snow` needs longer to find a
+distinctive start;
+`sensor_errors` shows that a 2° camera mount misalignment becomes a ~6 m bias
+that no single frame can reveal.
 
 The simulator is still kinder than reality (flat ground, the map and the
 drone view share exact geometry). Expect real cross-season match scores to be
