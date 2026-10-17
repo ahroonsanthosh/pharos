@@ -86,7 +86,10 @@ around the prediction and three altitude-scale hypotheses.
 entirely, so a look-alike place that fools one frame fools the next several
 too. The localizer keeps up to four candidate locations, tracks each with
 local searches, and confirms one only after it has covered at least 120 m of
-new ground with a clear mean-score lead. A wrong position reported as
+new ground, once stood out map-wide, and leads every rival over the frames
+both have seen. Candidates at the same spot with opposite headings count as
+rivals, because line-dominated scenes (survey grids) can match almost as well
+turned around. A wrong position reported as
 trustworthy is the worst failure mode, so the benchmark tracks the
 `confident_wrong` rate separately.
 
