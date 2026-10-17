@@ -90,15 +90,40 @@ def peak_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
     how large the window is, so the same threshold works in simulation and on
     real imagery. Above ~1.5 a peak is unlikely to be noise.
     """
+    noise = _noise(score, r, c, rho)
+    if noise is None:
+        return 0.0
+    mu, sigma, n = noise
+    n_eff = max(n / (np.pi * rho**2), 2.0)
+    return float((score[r, c] - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
+
+
+def peak_covariance(score: np.ndarray, r: int, c: int, rho: float) -> np.ndarray:
+    """Spread (2x2, pixels squared, row/column) of the offsets that score as well as the peak.
+
+    Offsets within one noise sigma of the peak are about as plausible as the
+    peak itself. Their second moment about the peak is small for a sharp peak
+    but long along a ridge (a straight edge seen along its length, which fixes
+    position only across it) and between repeats of a repeated pattern.
+    """
+    noise = _noise(score, r, c, rho)
+    if noise is None:
+        return np.zeros((2, 2))
+    rows, cols = np.nonzero(score >= score[r, c] - noise[1])
+    d = np.column_stack([rows - r, cols - c]).astype(float)
+    return d.T @ d / len(d)
+
+
+def _noise(score: np.ndarray, r: int, c: int, rho: float) -> tuple[float, float, int] | None:
+    """Robust median and sigma of the scores outside the peak's main lobe, and their count."""
     yy, xx = np.ogrid[: score.shape[0], : score.shape[1]]
     far = ((yy - r) ** 2 + (xx - c) ** 2 > (3 * rho) ** 2) & (score > -1)
-    if far.sum() < 20:
-        return 0.0
+    n = int(far.sum())
+    if n < 20:
+        return None
     vals = score[far]
     mu = float(np.median(vals))
-    sigma = 1.4826 * float(np.median(np.abs(vals - mu))) + 1e-6
-    n_eff = max(far.sum() / (np.pi * rho**2), 2.0)
-    return float((score[r, c] - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
+    return mu, 1.4826 * float(np.median(np.abs(vals - mu))) + 1e-6, n
 
 
 def subpixel(score: np.ndarray, r: int, c: int) -> tuple[float, float]:

@@ -5,6 +5,7 @@ from pharos.vision.correlate import (
     Correlator,
     find_peaks,
     parabola_offset,
+    peak_covariance,
     peak_excess,
     subpixel,
 )
@@ -69,3 +70,17 @@ def test_peak_excess_separates_signal_from_window_noise():
     signal = noise.copy()
     signal[60, 60] = 0.6
     assert peak_excess(signal, 60, 60, rho=5) > 3.0
+
+
+def test_peak_covariance_is_long_along_a_ridge():
+    rng = np.random.default_rng(0)
+    noise = rng.normal(0, 0.05, (101, 101))
+    yy, xx = np.mgrid[:101, :101]
+    sharp = noise + 0.8 * np.exp(-((yy - 50) ** 2 + (xx - 50) ** 2) / 8)
+    ridge = noise + 0.8 * np.exp(-((yy - 50) ** 2) / 8)  # a horizontal line: rows fixed, cols free
+    ridge[50, 50] += 0.1
+    sharp_cov = peak_covariance(sharp, 50, 50, rho=5)
+    ridge_cov = peak_covariance(ridge, 50, 50, rho=5)
+    assert np.sqrt(np.linalg.eigvalsh(sharp_cov).max()) < 2
+    assert ridge_cov[1, 1] > 100 * ridge_cov[0, 0]  # spread along columns only
+    assert np.sqrt(ridge_cov[1, 1]) > 15

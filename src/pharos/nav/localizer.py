@@ -207,6 +207,7 @@ class Localizer:
                 pos_sigma=cfg.meas_sigma_m,
                 heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
             )
+            kf.P[:2, :2] += _spread(f)
             hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
             if reach is not None:
                 hyp.near_lost_track = bool(np.hypot(*(hyp.xy - self._lost_track[1])) <= reach)
@@ -288,6 +289,7 @@ class Localizer:
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
             R = np.diag([cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, sigma_h**2])
+            R[:2, :2] += _spread(fix)  # a ridge-shaped peak fixes position only across it
             z = np.array([fix.x, fix.y, fix.heading])
             nu, S, _ = kf.innovation(z, R)
             if not kf.update(z, R):
@@ -366,3 +368,8 @@ class Localizer:
             fix,
             latency_ms,
         )
+
+
+def _spread(fix: Fix) -> np.ndarray:
+    ee, en, nn = fix.spread
+    return np.array([[ee, en], [en, nn]])

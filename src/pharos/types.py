@@ -61,6 +61,9 @@ class Fix:
     distinctiveness: float  # 1 - second_best / best, in [0, 1]
     scale: float = 1.0  # correction factor applied to the reported altitude
     excess: float = 0.0  # peak height above its window's noise (see correlate.peak_excess)
+    # Position ambiguity of the peak, m^2 (east-east, east-north, north-north): large
+    # along a ridge, e.g. when flying along a straight field edge (correlate.peak_covariance)
+    spread: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 class Status(StrEnum):

@@ -1,4 +1,4 @@
-"""Command line: ``pharos analyze | probe | serve | simulate | localize | bench``."""
+"""Command line: ``pharos analyze | probe | sync | serve | simulate | localize | bench``."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from pharos.nav.localizer import LocalizerConfig
 from pharos.recording import load_recording, save_recording
 from pharos.sim.flight import simulate
 from pharos.sim.scenario import builtin_scenarios, load_scenario
+from pharos.sync import estimate_sync
 from pharos.telemetry import DataflashTelemetry, SrtTelemetry
 from pharos.types import Estimate
 
@@ -62,6 +63,16 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--every", type=int, default=1, help="use every Nth frame")
     p.add_argument("-o", "--out", type=Path, help="write per-frame rows and summary as JSON")
     p.set_defaults(func=_probe)
+
+    p = sub.add_parser("sync", help="find where a video starts in its ArduPilot log")
+    p.add_argument("video", type=Path)
+    p.add_argument("--log", type=Path, required=True, help="ArduPilot DataFlash log (.bin)")
+    p.add_argument("--log-sync", type=float, default=0.0, help="first guess, seconds")
+    p.add_argument("--hfov", type=float, required=True, help="horizontal field of view, degrees")
+    p.add_argument("--start", type=float, default=0.0, help="video time to start at, seconds")
+    p.add_argument("--end", type=float, help="video time to stop at (default: start + 120 s)")
+    p.add_argument("--span", type=float, default=2.0, help="search this far around the guess")
+    p.set_defaults(func=_sync)
 
     p = sub.add_parser("serve", help="live service: ingest feeds, dashboard at http://HOST:PORT")
     p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to accept other devices")
@@ -151,6 +162,21 @@ def _probe(args) -> None:
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps({"summary": summary, "frames": rows}, indent=1))
+
+
+def _sync(args) -> None:
+    telemetry = DataflashTelemetry(args.log, sync_s=args.log_sync)
+    end = args.end if args.end is not None else args.start + 120.0
+    footage = load_footage(
+        args.video, hfov_deg=args.hfov, telemetry=telemetry, start_s=args.start, end_s=end
+    )
+    result = estimate_sync(footage.recording, telemetry, footage.recording.camera, args.span)
+    for offset, jitter in result.curve:
+        print(f"  {args.log_sync + offset:7.2f} s  odometry jitter {jitter:6.2f} m")
+    print(
+        f"--log-sync {args.log_sync + result.offset_s:.2f}  (odometry jitter "
+        f"{result.jitter_m:.2f} m, {result.initial_jitter_m:.2f} m at {args.log_sync:.2f})"
+    )
 
 
 def _simulate(args) -> None:

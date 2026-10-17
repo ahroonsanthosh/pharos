@@ -16,6 +16,7 @@ from pharos.vision.correlate import (
     Correlator,
     find_peaks,
     parabola_offset,
+    peak_covariance,
     peak_excess,
     subpixel,
 )
@@ -166,8 +167,12 @@ class CorrelationMatcher:
         _, gsd = self._features(cfg.fine_level)
         peaks = find_peaks(res.best, 2, max(int(cfg.sidelobe_m / gsd), 2))
         s2 = peaks[1][2] if len(peaks) > 1 else 0.0
-        excess = peak_excess(res.best, r, c, rho=2 * cfg.features.smooth)
-        return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est, excess)
+        rho = 2 * cfg.features.smooth
+        excess = peak_excess(res.best, r, c, rho)
+        # rows run south: (row, col) pixels to (east, north) metres
+        (crr, crc), (_, ccc) = peak_covariance(res.best, r, c, rho) * gsd**2
+        spread = (float(ccc), float(-crc), float(crr))
+        return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est, excess, spread)
 
     def _search(self, gray, frame, level, center, radius, headings, scales, keep) -> _Search | None:
         tel = frame.telemetry

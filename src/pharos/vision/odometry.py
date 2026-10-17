@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 
 from pharos.geometry import Camera, ground_to_image, image_to_ground_points
-from pharos.types import Frame
+from pharos.types import Frame, Telemetry
 
 
 @dataclass(frozen=True)
@@ -66,27 +66,18 @@ class VisualOdometry:
 
     def step(self, frame: Frame, altitude_scale: float = 1.0) -> Motion | None:
         """Motion since the previous call, or None (first frame, too little overlap)."""
-        uv, desc = self._features(frame.image)
-        prev, self._prev = self._prev, (uv, desc, frame, altitude_scale)
-        if prev is None or desc is None or prev[1] is None or len(uv) < self.cfg.min_inliers:
+        features = self.features(frame.image)
+        prev, self._prev = self._prev, (*features, frame, altitude_scale)
+        if prev is None:
             return None
-        uv_a, desc_a, frame_a, scale_a = prev
-        pairs = self._matcher.knnMatch(desc, desc_a, k=2)
-        good = [
-            p[0] for p in pairs if len(p) == 2 and p[0].distance < self.cfg.ratio * p[1].distance
-        ]
-        if len(good) < self.cfg.min_inliers:
+        pairs = self.correspondences(prev[:2], features)
+        if pairs is None:
             return None
-        ground_a = self._to_ground(uv_a[[m.trainIdx for m in good]], frame_a, scale_a)
-        ground_b = self._to_ground(uv[[m.queryIdx for m in good]], frame, altitude_scale)
-        ok = np.all(np.isfinite(ground_a), axis=1) & np.all(np.isfinite(ground_b), axis=1)
-        if ok.sum() < self.cfg.min_inliers:
-            return None
-        return self._fit(ground_b[ok], ground_a[ok], frame.telemetry.altitude * altitude_scale)
+        tel_a, tel_b = prev[2].telemetry, frame.telemetry
+        return self.motion(*pairs, tel_a, tel_b, prev[3], altitude_scale)
 
-    # -- internals --------------------------------------------------------
-
-    def _features(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+    def features(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        """Keypoint pixel positions and descriptors of one frame."""
         gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         f = min(1.0, self.cfg.max_width / gray.shape[1])
         if f < 1.0:
@@ -96,9 +87,40 @@ class VisualOdometry:
         uv = np.array([k.pt for k in keypoints], np.float64).reshape(-1, 2)
         return (uv + 0.5) / f - 0.5, desc
 
-    def _to_ground(self, uv: np.ndarray, frame: Frame, altitude_scale: float) -> np.ndarray:
+    def correspondences(self, a, b) -> tuple[np.ndarray, np.ndarray] | None:
+        """Pixel positions of the features of frame ``a`` matched in frame ``b``."""
+        (uv_a, desc_a), (uv_b, desc_b) = a, b
+        if desc_a is None or desc_b is None or len(uv_b) < self.cfg.min_inliers:
+            return None
+        pairs = self._matcher.knnMatch(desc_b, desc_a, k=2)
+        good = [
+            p[0] for p in pairs if len(p) == 2 and p[0].distance < self.cfg.ratio * p[1].distance
+        ]
+        if len(good) < self.cfg.min_inliers:
+            return None
+        return uv_a[[m.trainIdx for m in good]], uv_b[[m.queryIdx for m in good]]
+
+    def motion(
+        self,
+        uv_a: np.ndarray,
+        uv_b: np.ndarray,
+        tel_a: Telemetry,
+        tel_b: Telemetry,
+        scale_a: float = 1.0,
+        scale_b: float = 1.0,
+    ) -> Motion | None:
+        """Motion from frame ``a`` to ``b`` given matched pixels and each frame's telemetry."""
+        ground_a = self._to_ground(uv_a, tel_a, scale_a)
+        ground_b = self._to_ground(uv_b, tel_b, scale_b)
+        ok = np.all(np.isfinite(ground_a), axis=1) & np.all(np.isfinite(ground_b), axis=1)
+        if ok.sum() < self.cfg.min_inliers:
+            return None
+        return self._fit(ground_b[ok], ground_a[ok], tel_b.altitude * scale_b)
+
+    # -- internals --------------------------------------------------------
+
+    def _to_ground(self, uv: np.ndarray, tel: Telemetry, altitude_scale: float) -> np.ndarray:
         """Heading-up ground coordinates (right, forward) in metres, nadir at the origin."""
-        tel = frame.telemetry
         altitude = tel.altitude * altitude_scale
         H = ground_to_image(self.camera, (0.0, 0.0, altitude), 0.0, tel.pitch, tel.roll)
         ground = image_to_ground_points(H, uv)
