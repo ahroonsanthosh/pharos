@@ -4,6 +4,7 @@ import numpy as np
 
 from pharos.eval.bench import localize
 from pharos.eval.metrics import evaluate
+from pharos.nav.localizer import Localizer
 from pharos.types import Status
 from pharos.vision.matcher import CorrelationMatcher, SearchRegion
 
@@ -44,3 +45,24 @@ def test_localizer_tracks_flight(small_sim):
     assert m["availability"] > 0.5
     assert m["err_median_m"] < 6
     assert m["confident_wrong"] == 0
+
+
+def test_track_survives_a_blackout_without_false_fixes(small_sim):
+    """Six seconds of blank frames: coast, never claim a wrong position, recover quickly."""
+    from pharos.types import Frame
+
+    geomap, rec = small_sim
+    blank = range(24, 36)
+    frames = [
+        Frame(f.t, f.image * 0 + 110, f.telemetry) if i in blank else f
+        for i, f in enumerate(rec.frames)
+    ]
+    loc = Localizer(geomap, rec.camera)
+    estimates = [loc.process(f) for f in frames]
+    m = evaluate(estimates, rec.truth)
+    assert m["confident_wrong"] == 0
+    # dead reckoning is trusted only while its uncertainty is small, then it coasts
+    assert all(e.status is not Status.TRACKING or e.sigma_xy <= 15 for e in estimates[24:36])
+    assert any(e.status is Status.COASTING for e in estimates[24:36])
+    recovered = [i for i in range(36, len(estimates)) if estimates[i].status is Status.TRACKING]
+    assert recovered and recovered[0] <= 36 + 6

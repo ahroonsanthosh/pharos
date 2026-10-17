@@ -41,6 +41,11 @@ class LocalizerConfig:
     max_hypotheses: int = 4
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
+    # After losing a confirmed track, search where the aircraft can have flown since,
+    # and confirm a candidate there with fewer matches (continuity is evidence too).
+    reacquire_window_s: float = 60.0
+    max_speed: float = 30.0  # m/s
+    reacquire_confirm_frames: int = 3  # matches including the acquisition (vs confirm_frames)
     # Confirmation
     confirm_frames: int = 4
     confirm_distance_m: float = 120.0  # ground covered before a candidate can win
@@ -49,9 +54,11 @@ class LocalizerConfig:
     track_min_score: float = 0.18
     track_min_excess: float = 1.5  # a match must stand out from its window's noise
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
-    max_coast_s: float = 8.0  # a confirmed track is dropped after this long without a match,
-    max_coast_sigma_m: float = 30.0  # unless odometry keeps its uncertainty below this
+    # A confirmed track keeps searching around its prediction (reported as coasting) while
+    # the window that needs stays within max_search_m, for up to max_coast_s.
+    max_coast_s: float = 30.0
     trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
+    reconfirm_frames: int = 2  # consecutive matches needed to trust a track again after coasting
     meas_sigma_m: float = 3.0
     meas_heading_sigma_deg: float = 2.0
     search_sigmas: float = 3.0
@@ -71,6 +78,9 @@ class _Hypothesis:
     last_hit_xy: np.ndarray | None = None
     travelled: float = 0.0  # distance between matched positions, not dead reckoning
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
+    trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
+    near_lost_track: bool = False  # found where a just-lost track could have flown to
+    streak: int = 0  # consecutive matches
 
     @property
     def mean_score(self) -> float:
@@ -104,6 +114,7 @@ class Localizer:
         self._odometry_nis = 2.0  # running normalized innovation; 2 when the model fits
         self.compass_offset = 0.0  # running estimate of true heading - compass
         self._frames_in_state = 0
+        self._lost_track: tuple[float, np.ndarray] | None = None  # (time, xy) of its last match
         self._last_t: float | None = None
         self._last_yaw: float | None = None
 
@@ -118,21 +129,25 @@ class Localizer:
             if self.status is Status.LOST:
                 self._frames_in_state += 1
         else:
-            fixes = [self._step(h, frame) for h in self.hypotheses]
-            limit = (
-                self.cfg.max_coast_s
-                if self.status is Status.TRACKING
-                else self.cfg.max_coast_converging_s
-            )
+            for h in self.hypotheses:
+                self._predict(h, frame)
+            if self.status is Status.TRACKING:
+                # Decide before searching: a wide search must not resurrect a lost track.
+                for h in self.hypotheses:
+                    if not self._searchable(h, frame.t) and h.last_hit_xy is not None:
+                        self._lost_track = (h.last_hit_t, h.last_hit_xy.copy())
+                self.hypotheses = [h for h in self.hypotheses if self._searchable(h, frame.t)]
+            fixes = [self._measure(h, frame) for h in self.hypotheses]
             alive = [
                 (h, f)
                 for h, f in zip(self.hypotheses, fixes, strict=True)
-                if frame.t - h.last_hit_t <= limit or self._coasting_ok(h)
+                if self.status is Status.TRACKING
+                or frame.t - h.last_hit_t <= self.cfg.max_coast_converging_s
             ]
             self.hypotheses = [h for h, _ in alive]
             if self.status is Status.TRACKING and alive:
                 fix = alive[0][1]
-                if fix is not None:
+                if fix is not None and alive[0][0].trusted:
                     self._learn(fix, frame)
             elif self.status is Status.CONVERGING:
                 self._frames_in_state += 1
@@ -151,9 +166,15 @@ class Localizer:
     def _acquire(self, frame: Frame) -> None:
         cfg = self.cfg
         yaw = frame.telemetry.yaw
+        center, radius = cfg.prior_center, cfg.prior_radius_m
+        reach = self._reach(frame.t)
+        if reach is not None:
+            center, radius = tuple(self._lost_track[1]), reach
+            # stay on the coarse (global) search path; it is restricted to this region
+            radius = max(radius, cfg.matcher.global_radius_m + 1.0)
         region = SearchRegion(
-            center=cfg.prior_center,
-            radius=cfg.prior_radius_m,
+            center=center,
+            radius=radius,
             heading=None if yaw is None else float(wrap_angle(yaw + self.compass_offset)),
             heading_span=np.radians(cfg.compass_prior_deg),
         )
@@ -172,6 +193,8 @@ class Localizer:
                 heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
             )
             hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
+            if reach is not None:
+                hyp.near_lost_track = bool(np.hypot(*(hyp.xy - self._lost_track[1])) <= reach)
             self.hypotheses.append(hyp)
         if self.hypotheses and self.status is Status.LOST:
             self.status = Status.CONVERGING
@@ -189,9 +212,13 @@ class Localizer:
             return
         best = max(self.hypotheses, key=lambda h: h.mean_score)
         hits = sum(s > 0 for s in best.scores)
+        if best.near_lost_track:
+            needed, distance = cfg.reacquire_confirm_frames, 0.0
+        else:
+            needed, distance = cfg.confirm_frames, cfg.confirm_distance_m
         if (
-            hits < cfg.confirm_frames
-            or best.travelled < cfg.confirm_distance_m
+            hits < needed
+            or best.travelled < distance
             or best.mean_score < cfg.init_min_score
             or best.distinct < cfg.init_min_distinctiveness
         ):
@@ -204,10 +231,11 @@ class Localizer:
                 return
         self.hypotheses = [best]
         self.status = Status.TRACKING
+        self._lost_track = None
 
     # -- per-hypothesis tracking ------------------------------------------
 
-    def _step(self, h: _Hypothesis, frame: Frame) -> Fix | None:
+    def _predict(self, h: _Hypothesis, frame: Frame) -> None:
         cfg, kf = self.cfg, h.filter
         dt = frame.t - self._last_t if self._last_t is not None else 0.0
         yaw, last = frame.telemetry.yaw, self._last_yaw
@@ -217,7 +245,11 @@ class Localizer:
             kf.predict_motion(dt, m.d_body, m.d_heading, g * m.sigma_m, g * m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
+        if kf.pos_sigma > cfg.trust_sigma_m:
+            h.trusted = False  # a wide search must be confirmed before it is trusted again
 
+    def _measure(self, h: _Hypothesis, frame: Frame) -> Fix | None:
+        cfg, kf, m = self.cfg, h.filter, self._motion
         region = SearchRegion(
             center=(float(kf.x[0]), float(kf.x[1])),
             radius=float(
@@ -245,9 +277,12 @@ class Localizer:
             nu, S, _ = kf.innovation(z, R)
             if not kf.update(z, R):
                 fix = None
-            elif m is not None and self.status is Status.TRACKING:
+            elif m is not None and self.status is Status.TRACKING and h.trusted:
                 self._learn_odometry(float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2])))
         h.scores.append(fix.score if fix is not None else 0.0)
+        h.streak = h.streak + 1 if fix is not None else 0
+        if not h.trusted and h.streak >= cfg.reconfirm_frames:
+            h.trusted = True
         if fix is not None:
             if h.last_hit_xy is not None:
                 h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
@@ -256,13 +291,21 @@ class Localizer:
 
     # -- helpers ----------------------------------------------------------
 
-    def _coasting_ok(self, h: _Hypothesis) -> bool:
-        """A confirmed track may coast on odometry while its uncertainty stays small."""
-        return (
-            self.status is Status.TRACKING
-            and self._motion is not None
-            and h.filter.pos_sigma <= self.cfg.max_coast_sigma_m
-        )
+    def _reach(self, t: float) -> float | None:
+        """How far the aircraft can be from the last match of a recently lost track."""
+        if self._lost_track is None:
+            return None
+        elapsed = t - self._lost_track[0]
+        if elapsed > self.cfg.reacquire_window_s:
+            self._lost_track = None
+            return None
+        return self.cfg.max_speed * elapsed + 50.0
+
+    def _searchable(self, h: _Hypothesis, t: float) -> bool:
+        """A confirmed track lives while its predicted position can still be searched for."""
+        cfg = self.cfg
+        within = cfg.search_sigmas * h.filter.pos_sigma <= cfg.max_search_m
+        return within and t - h.last_hit_t <= cfg.max_coast_s
 
     def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
         try:
@@ -294,7 +337,9 @@ class Localizer:
         lead = max(self.hypotheses, key=lambda h: h.mean_score)
         x, y, _, _, heading = lead.filter.x
         status = self.status
-        if status is Status.TRACKING and lead.filter.pos_sigma > self.cfg.trust_sigma_m:
+        if status is Status.TRACKING and (
+            not lead.trusted or lead.filter.pos_sigma > self.cfg.trust_sigma_m
+        ):
             status = Status.COASTING
         return Estimate(
             t,

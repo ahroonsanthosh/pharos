@@ -94,3 +94,17 @@ def test_analyze_recorded_dji_video(small_sim, tmp_path):
     assert summary["confident_wrong"] == 0
     for name in ("track.geojson", "track.kml", "track.csv", "overview.png", "frames.jsonl"):
         assert (out / name).stat().st_size > 0
+
+
+def test_probe_separates_truth_from_decoys(small_sim):
+    from pharos.eval.probe import probe, summarize_probe
+    from pharos.footage import Footage
+    from pharos.recording import Recording
+
+    geomap, rec = small_sim
+    gnss = [geomap.to_latlon(g.x, g.y) for g in rec.truth]
+    footage = Footage(Recording(rec.camera, rec.frames, rec.truth), gnss)
+    summary = summarize_probe(probe(footage, geomap, every=6))
+    assert summary["frames"] == 10
+    assert summary["true_pass_1.5"] >= 0.8
+    assert summary["decoy_pass_1.5"] <= 0.2

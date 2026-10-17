@@ -116,6 +116,14 @@ lets a confirmed track coast through stretches with nothing to match. Its
 error model is deliberately honest: attitude noise between frames shifts all
 projected points alike and cannot be separated from motion.
 
+**Losing and finding a track.** A confirmed track that stops matching keeps
+searching around its prediction (reported as coasting, not trusted) for as
+long as that window stays searchable; the check happens before the search, so
+a wide search cannot resurrect a track that is already out of reach. Coming
+back from coasting needs consecutive matches. Once lost, the next searches are
+restricted to where the aircraft can have flown since its last match, and a
+candidate found there needs fewer confirmations: continuity is evidence too.
+
 **Self-calibration.** Accepted fixes slowly update the altitude scale (baro
 bias) and the compass offset (magnetic bias). The compass is otherwise used
 only for frame-to-frame heading changes and as a loose prior when lost.

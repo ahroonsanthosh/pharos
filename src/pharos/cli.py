@@ -1,4 +1,4 @@
-"""Command line: ``pharos analyze | serve | simulate | localize | bench``."""
+"""Command line: ``pharos analyze | probe | serve | simulate | localize | bench``."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pharos.config import load_yaml
 from pharos.eval.bench import localize, run_scenarios, table_header, table_row
 from pharos.eval.metrics import evaluate
 from pharos.eval.plot import draw_track
+from pharos.eval.probe import probe, summarize_probe
 from pharos.footage import load_footage
 from pharos.geomap import GeoMap
 from pharos.nav.localizer import LocalizerConfig
@@ -47,19 +48,19 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=_bench)
 
     p = sub.add_parser("analyze", help="localize recorded footage and export the track")
-    p.add_argument("footage", type=Path, help="video file or folder of photos")
-    p.add_argument("--map", type=Path, required=True, help="GeoTIFF or map .json")
-    p.add_argument("--hfov", type=float, help="horizontal field of view, degrees")
-    p.add_argument("--altitude", type=float, help="height above ground, if the footage has none")
-    p.add_argument(
-        "--ground", type=float, help="ground height in the photos' GPS altitude reference"
-    )
-    p.add_argument("--srt", type=Path, help="DJI subtitle file (default: next to the video)")
-    p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
-    p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
+    _footage_args(p)
     p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("-o", "--out", type=Path, required=True)
     p.set_defaults(func=_analyze)
+
+    p = sub.add_parser(
+        "probe", help="per-frame match quality on footage with GNSS (for tuning on real data)"
+    )
+    _footage_args(p)
+    p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides (matcher part)")
+    p.add_argument("--every", type=int, default=1, help="use every Nth frame")
+    p.add_argument("-o", "--out", type=Path, help="write per-frame rows and summary as JSON")
+    p.set_defaults(func=_probe)
 
     p = sub.add_parser("serve", help="live service: ingest feeds, dashboard at http://HOST:PORT")
     p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to accept other devices")
@@ -72,7 +73,20 @@ def main(argv: list[str] | None = None) -> None:
     args.func(args)
 
 
-def _analyze(args) -> None:
+def _footage_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("footage", type=Path, help="video file or folder of photos")
+    p.add_argument("--map", type=Path, required=True, help="GeoTIFF or map .json")
+    p.add_argument("--hfov", type=float, help="horizontal field of view, degrees")
+    p.add_argument("--altitude", type=float, help="height above ground, if the footage has none")
+    p.add_argument(
+        "--ground", type=float, help="ground height in the photos' GPS altitude reference"
+    )
+    p.add_argument("--srt", type=Path, help="DJI subtitle file (default: next to the video)")
+    p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
+    p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
+
+
+def _load_footage_and_map(args):
     footage = load_footage(
         args.footage,
         hfov_deg=args.hfov,
@@ -81,7 +95,11 @@ def _analyze(args) -> None:
         srt=args.srt,
         rate_hz=args.rate,
     )
-    geomap = GeoMap.open(args.map).resampled(args.map_gsd)
+    return footage, GeoMap.open(args.map).resampled(args.map_gsd)
+
+
+def _analyze(args) -> None:
+    footage, geomap = _load_footage_and_map(args)
 
     def progress(i: int, n: int, rec: dict) -> None:
         err = f"  error vs GNSS {rec['error_m']:.0f} m" if "error_m" in rec else ""
@@ -92,6 +110,21 @@ def _analyze(args) -> None:
     summary = write_outputs(records, geomap, args.out, args.footage.name)
     print(json.dumps(summary, indent=2))
     print(f"wrote {args.out}: track.geojson, track.kml, track.csv, overview.png")
+
+
+def _probe(args) -> None:
+    footage, geomap = _load_footage_and_map(args)
+
+    def progress(i: int, n: int, row: dict) -> None:
+        print(f"\r{i}/{n}", end="", flush=True)
+
+    rows = probe(footage, geomap, _config(args.config).matcher, every=args.every, progress=progress)
+    print()
+    summary = summarize_probe(rows)
+    print(json.dumps(summary, indent=2))
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps({"summary": summary, "frames": rows}, indent=1))
 
 
 def _simulate(args) -> None:

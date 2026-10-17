@@ -34,6 +34,7 @@ photo sets, old flight videos. Footage is processed as fast as the CPU allows.
 pharos analyze DJI_0042.MP4 --map area.tif --hfov 70        # .SRT next to the video is used
 pharos analyze photos/ --map area.tif                       # EXIF GPS/time, DJI or senseFly XMP
 pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry at all
+pharos probe photos/ --map area.tif     # per-frame match quality, for footage with GPS
 ```
 
 It writes `track.geojson`, `track.kml` (opens in Google Earth), `track.csv`,
@@ -128,9 +129,9 @@ position given:
 
 | reference map | frames trusted | median error | 95th pct | confidently wrong |
 |---|---:|---:|---:|---:|
-| NAIP 2015 (July, 1 m) | 39% | 11 m | 19 m | 0% |
-| NAIP 2019 (October) | 18% | 12 m | 19 m | 0% |
-| NAIP 2023 (May) | 31% | 11 m | 19 m | 0% |
+| NAIP 2015 (July, 1 m) | 43% | 11 m | 19 m | 0% |
+| NAIP 2019 (October) | 25% | 12 m | 17 m | 0% |
+| NAIP 2023 (May) | 39% | 11 m | 18 m | 0% |
 
 Errors are measured against the photos' own GPS (about 1.5 m accurate). How
 it got here, and what this footage taught:
@@ -142,8 +143,16 @@ it got here, and what this footage taught:
 * Visual odometry between photos replaced the constant-velocity guess (it
   needed windows up to 150 m with 4 to 13 s between photos). Its error
   differs by platform (a banking fixed-wing is far noisier than a gimbal), so
-  confirmed tracks calibrate it from their own innovations. Together this
-  raised coverage from 0 to 4% to 18 to 39%.
+  confirmed tracks calibrate it from their own innovations.
+* Tracks were lost at every tight turn, where photos are up to 22 s apart
+  and do not overlap. A confirmed track now keeps searching around its
+  prediction while that is still feasible (reported as coasting, re-trusted
+  only after consecutive matches), and a lost track is re-acquired within the
+  area the aircraft can have reached, with fewer confirmations needed.
+  Together with odometry this raised coverage from 0 to 4% to 25 to 43%.
+* Per frame, the true location stands out from noise in 55 to 73% of frames
+  (`pharos probe`); feature-scale variations tuned on this footage did not
+  beat the defaults.
 * Photo GPS altitude was above the WGS84 ellipsoid, not sea level: 34 m, a
   50% scale error at this altitude. The eBee's camera attitude is recorded,
   but its sign convention had to be determined from the data.
