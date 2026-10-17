@@ -62,12 +62,15 @@ class LocalizerConfig:
     max_hypotheses: int = 4
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
-    # A lost track keeps dead reckoning. Acquisition then searches only its 3-sigma region,
-    # and while that region is small a candidate in it is confirmed with fewer matches
-    # (continuity is evidence too). Beyond max_dead_reckoning_m the whole region is searched.
+    # A lost track keeps dead reckoning. Acquisition then searches its 3-sigma region, and
+    # every wide_search_every-th search the whole region (the lost track may have been wrong
+    # already). For reacquire_window_s after the loss, while the region is small, a candidate
+    # inside it is confirmed with fewer matches: continuity is evidence too.
+    reacquire_window_s: float = 60.0
     reacquire_radius_m: float = 1000.0
     reacquire_confirm_frames: int = 3  # matches including the acquisition (vs confirm_frames)
-    max_dead_reckoning_m: float = 2000.0
+    wide_search_every: int = 3
+    max_dead_reckoning_m: float = 2000.0  # beyond this 3-sigma radius, dead reckoning stops
     max_speed: float = 30.0  # m/s; faster odometry is a wrong fit
     # Confirmation
     confirm_frames: int = 4
@@ -101,9 +104,6 @@ class LocalizerConfig:
     min_heading_span_deg: float = 6.0  # at least three fine heading steps
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
-    # Bounds on the learned odometry noise factor. It only inflates the error model: averaged
-    # innovations hide the rare bad steps (RANSAC on the wrong cluster, a bank started mid-step).
-    odometry_gain_range: tuple[float, float] = (1.0, 4.0)
 
 
 def usable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
@@ -159,16 +159,14 @@ class Localizer:
         self.status = Status.LOST
         self.hypotheses: list[_Hypothesis] = []
         self.scale = 1.0  # running estimate of true / reported altitude
-        # Odometry error varies by platform (a banking fixed-wing vs a stabilized
-        # gimbal), so confirmed tracks learn a factor on its stated uncertainty.
-        self.odometry_gain = 1.0
-        self._odometry_nis = 2.0  # running normalized innovation; 2 when the model fits
         self.compass_offset = 0.0  # running estimate of true heading - compass
         self._frames_in_state = 0
         self._last_t: float | None = None
         self._last_yaw: float | None = None
         self.window: PoseWindow | None = None
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
+        self._lost_at = 0.0
+        self._searches = 0  # acquisition searches since the loss
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
         self._window_start = 0.0
         # Every frame, for the whole-flight solve: telemetry, odometry, the match used, estimate.
@@ -234,9 +232,15 @@ class Localizer:
             heading=None if yaw is None else float(wrap_angle(yaw + self.compass_offset)),
             heading_span=np.radians(cfg.compass_prior_deg),
         )
+        self._searches += 1
+        fast = False  # whether a candidate inside the dead-reckoned region confirms faster
         if dr is not None:
             x, y, heading = dr.pose
             reach = cfg.search_sigmas * dr.sigma()
+            fast = reach <= cfg.reacquire_radius_m and (
+                frame.t - self._lost_at <= cfg.reacquire_window_s
+            )
+        if dr is not None and self._searches % cfg.wide_search_every:
             region = SearchRegion(
                 center=(float(x), float(y)),
                 # stay on the coarse (global) search path; it is restricted to this region
@@ -267,8 +271,8 @@ class Localizer:
             kf.P[:2, :2] += _spread(f)
             hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
             hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
-            if dr is not None and reach <= cfg.reacquire_radius_m:
-                hyp.near_track = bool(np.hypot(*(hyp.xy - region.center)) <= reach)
+            if fast:
+                hyp.near_track = bool(np.hypot(*(hyp.xy - (x, y))) <= reach)
             self.hypotheses.append(hyp)
         if self.hypotheses and self.status is Status.LOST:
             self.status = Status.CONVERGING
@@ -317,8 +321,7 @@ class Localizer:
         m = self._motion
         before = h.xy
         if m is not None:
-            g = self.odometry_gain
-            kf.predict_motion(dt, m.d_body, m.d_heading, g * m.sigma_m, g * m.sigma_heading)
+            kf.predict_motion(dt, m.d_body, m.d_heading, m.sigma_m, m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
         h.flown += float(np.hypot(*(h.xy - before)))
@@ -327,7 +330,7 @@ class Localizer:
             h.streak, h.untrusted_since = 0, frame.t
 
     def _measure(self, h: _Hypothesis, frame: Frame) -> Fix | None:
-        cfg, kf, m = self.cfg, h.filter, self._motion
+        cfg, kf = self.cfg, h.filter
         region = SearchRegion(
             center=(float(kf.x[0]), float(kf.x[1])),
             radius=float(
@@ -350,18 +353,11 @@ class Localizer:
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
             R = np.diag([cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, sigma_h**2])
-            spread = _spread(fix)
-            R[:2, :2] += spread  # a ridge-shaped peak fixes position only across it
-            compact = np.linalg.eigvalsh(spread)[-1] <= cfg.meas_sigma_m**2
+            R[:2, :2] += _spread(fix)  # a ridge-shaped peak fixes position only across it
             if not h.trusted:
                 R[:2, :2] *= cfg.untrusted_meas_inflation
-            z = np.array([fix.x, fix.y, fix.heading])
-            nu, S, _ = kf.innovation(z, R)
-            if not kf.update(z, R):
+            if not kf.update(np.array([fix.x, fix.y, fix.heading]), R):
                 fix = None
-            elif m is not None and self.status is Status.TRACKING and h.trusted and compact:
-                # only sharp peaks: a ridge's own spread would make odometry look better than it is
-                self._learn_odometry(float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2])))
         h.scores.append(fix.score if fix is not None else 0.0)
         if fix is None:
             h.streak = 0
@@ -459,6 +455,7 @@ class Localizer:
     def _lose(self) -> None:
         """Stop matching around the track, but keep dead reckoning it."""
         self.dead_reckoning, self.window = self.window, None
+        self._lost_at, self._searches = self.dead_reckoning.nodes[-1].t, 0
         self.status = Status.LOST
         self._frames_in_state = 0
 
@@ -516,6 +513,9 @@ class Localizer:
                 and _independent(near, cfg.reconfirm_distance_m) >= cfg.trust_support
             )
             old = estimates[start + k]
+            if cfg.search_sigmas * sigma > cfg.max_dead_reckoning_m:  # as when live
+                estimates[start + k] = Estimate(old.t, Status.LOST, latency_ms=old.latency_ms)
+                continue
             estimates[start + k] = Estimate(
                 old.t,
                 Status.TRACKING if trusted else Status.COASTING,
@@ -551,16 +551,6 @@ class Localizer:
             return self.matcher.match(frame, region, self.scale)
         except ValueError:  # e.g. camera tilted above the horizon
             return []
-
-    def _learn_odometry(self, nis: float) -> None:
-        """Scale odometry's uncertainty so position innovations look as expected (chi2, 2 dof)."""
-        a = self.cfg.smoothing
-        self._odometry_nis += a * (min(nis, 20.0) - self._odometry_nis)
-        lo, hi = self.cfg.odometry_gain_range
-        target = self.odometry_gain * np.sqrt(self._odometry_nis / 2.0)
-        self.odometry_gain = float(
-            np.clip(self.odometry_gain + a * (target - self.odometry_gain), lo, hi)
-        )
 
     def _learn(self, fix: Fix, frame: Frame) -> None:
         """Slowly track altitude bias and compass offset from confirmed fixes."""

@@ -61,6 +61,10 @@ class WindowConfig:
     outlier_sigma_m: float = 60.0  # a match on a look-alike lands somewhere around
     outlier_heading_sigma_deg: float = 60.0
     outlier_rate: float = 0.2  # share of matches expected on look-alikes
+    # Matches closer together than this see largely the same ground, so they share their
+    # errors (a look-alike fools a run of overlapping frames alike): each of n such matches
+    # counts as 1/n of one. Counted as independent, a run outvotes odometry and shrinks sigma.
+    match_correlation_m: float = 40.0
     # Errors shared by all matches (calibration residuals, attitude timing) do not average
     # out over many matches; reported uncertainties include this much in quadrature.
     systematic_sigma_m: float = 3.0
@@ -166,9 +170,9 @@ class PoseWindow:
         """Prior on (frames ``cut`` and ``cut + 1``, compass offset) from the dropped frames.
 
         Schur complement of the dropped frames, over only the factors that leave the
-        window with them, so evidence still in the window is not counted twice. Every
-        such factor reaches at most two frames past a dropped one (the motion prior), so
-        none is lost.
+        window with them (the old prior among them), so evidence still in the window is
+        not counted twice. Every such factor reaches at most two frames past a dropped one
+        (the motion prior), so none is lost.
         """
         n = len(self.nodes)
         x = self._state()
@@ -177,10 +181,10 @@ class PoseWindow:
         dropped = _V * cut
         kept = [*range(dropped, dropped + 2 * _V), _V * n]
         known = set(kept)
-        rows = []
-        for i in range(J.shape[0]):
+        rows = list(range(len(self.prior[0])))  # the old prior's own rows come first
+        for i in range(len(rows), J.shape[0]):
             cols = J.indices[J.indptr[i] : J.indptr[i + 1]]
-            if cols.min() < dropped and all(c < dropped or c in known for c in cols):
+            if len(cols) and cols.min() < dropped and all(c < dropped or c in known for c in cols):
                 rows.append(i)
         Js = J[rows][:, list(range(dropped)) + kept].toarray()
         rs = r[rows]
@@ -371,9 +375,10 @@ class PoseWindow:
             J = np.stack([-1 / sg, 1 / sg], 1)[:, None, :]
             b.block(res[:, None], np.stack([col[k - 1] + 2, col[k] + 2], 1), J)
 
-        # motion: body-frame velocity changes slowly. Judged in odometry units (divided by
-        # the scale): in metres, shrinking every step would shrink the accelerations that
-        # odometry noise implies, and without matches the scale would collapse towards zero.
+        # motion: body-frame velocity changes slowly. Where odometry measured the step, it is
+        # judged in odometry units (divided by the scale): in metres, shrinking every step
+        # would shrink the accelerations that odometry noise implies, and with no match to
+        # pin it the scale would collapse. A step without odometry leaves the scale alone.
         if n >= 3:
             k = np.arange(2, n)
             dt1, dt2 = t[k - 1] - t[k - 2], t[k] - t[k - 1]
@@ -383,7 +388,9 @@ class PoseWindow:
                 Ra, dRa = _rt(F[k - 2, 2])
                 Rm, dRm = _rt(F[k - 1, 2])
                 d1, d2 = F[k - 1, :2] - F[k - 2, :2], F[k, :2] - F[k - 1, :2]
-                s = cfg.accel_sigma * 0.5 * (dt1 + dt2) * F[k, 3]
+                measured = np.array([nodes[i].motion is not None for i in k])
+                unit = np.where(measured, F[k, 3], 1.0)
+                s = cfg.accel_sigma * 0.5 * (dt1 + dt2) * unit
                 v1 = np.einsum("kab,kb->ka", Ra, d1) / dt1[:, None]
                 v2 = np.einsum("kab,kb->ka", Rm, d2) / dt2[:, None]
                 res = (v2 - v1) / s[:, None]
@@ -395,7 +402,7 @@ class PoseWindow:
                         -Rm * q2 - Ra * q1,
                         np.einsum("kab,kb->ka", dRm, d2)[..., None] * q2,
                         Rm * q2,
-                        (-res / F[k, 3:4])[..., None],
+                        (np.where(measured, -1.0, 0.0)[:, None] * res / unit[:, None])[..., None],
                     ],
                     axis=2,
                 )
@@ -416,6 +423,8 @@ class PoseWindow:
         if len(k):
             fixes = [nodes[i].fix for i in k]
             _, cov, sh = self._components(F[k, :3], fixes)
+            n = _crowding(np.array([[f.x, f.y] for f in fixes]), cfg.match_correlation_m)
+            cov, sh = cov * n[:, None, None], sh * np.sqrt(n)
             Wf = np.linalg.cholesky(np.linalg.inv(cov)).transpose(0, 2, 1)
             e = F[k, :2] - np.array([[f.x, f.y] for f in fixes])
             b.block(np.einsum("kab,kb->ka", Wf, e), np.stack([col[k], col[k] + 1], 1), Wf)
@@ -448,6 +457,14 @@ def _gyro(a: Telemetry, b: Telemetry) -> float | None:
     if a.yaw is None or b.yaw is None:
         return None
     return float(wrap_angle(b.yaw - a.yaw))
+
+
+def _crowding(xy: np.ndarray, radius: float) -> np.ndarray:
+    """Number of points within ``radius`` of each point, itself included."""
+    if radius <= 0 or len(xy) < 2:
+        return np.ones(len(xy))
+    d2 = np.sum((xy[:, None, :] - xy[None, :, :]) ** 2, axis=-1)
+    return np.sum(d2 < radius**2, axis=1).astype(float)
 
 
 def _cauchy(d, c: float):

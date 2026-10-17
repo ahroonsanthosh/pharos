@@ -168,3 +168,44 @@ def test_dead_reckoning_stays_honest_without_matches():
     assert np.mean(err <= 3 * sigma) > 0.95
     assert sigma[-1] < 1000  # grows with distance, but stays useful
     assert 0.8 < w.scale < 1.3
+
+
+def test_a_run_of_lookalike_matches_counts_as_one_place():
+    """Sixteen consecutive matches on one look-alike 50 m up-track, sparse true matches.
+
+    Overlapping frames share their errors. Counted as sixteen independent votes, the run
+    outvoted odometry and the solve claimed 3 to 5 m while 50 m off.
+    """
+    rng = np.random.default_rng(5)
+    track = racetrack(seconds=120)
+    obs = []
+    for k, (t, tel, motion, fix) in enumerate(observations(track, rng, 10**6, 10**6)):
+        _, x, y, h, _ = track[k]
+        if 120 <= k < 136:
+            u = 50 * np.array([math.sin(h), math.cos(h)]) + rng.normal(0, 2, 2)
+            fix = Fix(x + u[0], y + u[1], h, 0.5, 0.2)
+        elif k % 12:
+            fix = None
+        obs.append((t, tel, motion, fix))
+    t0, x0, y0, h0, _ = track[0]
+    w = PoseWindow(
+        WindowConfig(span_s=math.inf),
+        t0,
+        obs[0][1],
+        np.array([x0, y0, h0]),
+        np.diag([25.0] * 2 + [0.01]),
+    )
+    for t, tel, motion, fix in obs[1:]:
+        w.extend(t, tel, motion)
+        if fix is not None:
+            w.attach(fix)
+    w.solve(covariances="all")
+    err = np.array(
+        [
+            np.hypot(nd.pose[0] - tr[1], nd.pose[1] - tr[2])
+            for nd, tr in zip(w.nodes, track, strict=True)
+        ]
+    )
+    sigma = np.array([w.sigma(k) for k in range(len(w.nodes))])
+    assert err[110:146].max() < 25
+    assert np.all(err <= 3 * sigma)

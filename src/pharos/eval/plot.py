@@ -27,9 +27,12 @@ def draw_track(
     """BGR image: map (dimmed), truth in green, estimates (blue tracking, orange converging)."""
     img = geomap.image if geomap.image.ndim == 3 else cv2.cvtColor(geomap.image, cv2.COLOR_GRAY2BGR)
     img = (img * 0.6).astype(np.uint8)
+    h, w = img.shape[:2]
     pts_e = [
         (e, geomap.world_to_px(np.array([e.x, e.y]))) for e in estimates if e.status in _COLORS
     ]
+    # a coasting position can be far off the map (or nowhere, with a huge sigma)
+    pts_e = [(e, p) for e, p in pts_e if np.all(np.abs(p - (w / 2, h / 2)) <= (w, h))]
     pts_t = geomap.world_to_px(np.array([[g.x, g.y] for g in truth])) if truth else np.empty((0, 2))
 
     if len(pts_t) > 1:
@@ -41,7 +44,6 @@ def draw_track(
     if all_pts is None:
         return img
     m = margin_m / geomap.gsd
-    h, w = img.shape[:2]
     u0, v0 = np.clip(np.floor(all_pts.min(0) - m).astype(int), 0, [w, h])
     u1, v1 = np.clip(np.ceil(all_pts.max(0) + m).astype(int), 0, [w, h])
     return img[v0:v1, u0:u1]

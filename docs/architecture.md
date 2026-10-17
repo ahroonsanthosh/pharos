@@ -139,12 +139,23 @@ gyro heading changes, a smooth body-frame velocity, a loose compass with a
 learned offset, and every map match as a max-mixture of "right" and "a
 look-alike somewhere around". A wrong match is outvoted by the odometry chain
 and the other matches. On a real flight the window found that odometry ran
-7% short. Frames leaving the window become a prior on the two oldest kept
+7% short.
+
+Matches less than 40 m apart see largely the same ground and share their
+errors: a look-alike fools a run of overlapping frames alike. Each of n such
+matches therefore counts as 1/n of one. Counted as independent, a run of
+sixteen look-alike matches outvoted odometry and the solve claimed 3 to 5 m
+while 50 m off; on a real flight this one rule cut the whole-flight
+misleading rate from 1.9% to 0.5% and brought 99% of trusted errors within
+three sigmas (from 93%). Frames leaving the window become a prior on the two oldest kept
 frames (Schur complement over only the factors that leave with them, so
 nothing is counted twice and the velocity across the cut survives),
 loosened by 1.5 per window span against linearization error. Each of these
 details was a bug before it was a rule: loosened per frame, or kept on one
 frame, the prior forgot within a minute where a track without matches was.
+Likewise, velocity changes over steps that odometry measured are judged in
+odometry units: in metres, shrinking every step shrinks the accelerations
+that odometry noise implies, and without matches the scale collapsed.
 
 **Trust.** A position is reported as `tracking` only when its uncertainty
 is at most 10 m and at least two independent inlier matches (40 m of flight

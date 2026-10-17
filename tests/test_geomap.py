@@ -84,3 +84,17 @@ def test_latlon_inverse_and_resampling():
     # pixel centres of the coarse map land on the same world points
     np.testing.assert_allclose(coarse.px_to_world([0, 0]), gm.px_to_world([0.75, 0.75]))
     assert gm.resampled(1.0) is gm
+
+
+def test_track_overview_skips_positions_off_the_map():
+    """Dead reckoning can report a position far outside the map; drawing must not fail."""
+    from pharos.eval.plot import draw_track
+    from pharos.types import Estimate, Status
+
+    geomap = GeoMap(np.zeros((100, 120, 3), np.uint8), 1.0)
+    estimates = [
+        Estimate(0.0, Status.TRACKING, 50.0, -40.0),
+        Estimate(1.0, Status.COASTING, 3e9, -2e9, sigma_xy=3e4),
+        Estimate(2.0, Status.COASTING, float("nan"), 0.0),
+    ]
+    assert draw_track(geomap, estimates).size
