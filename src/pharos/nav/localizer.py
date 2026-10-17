@@ -84,6 +84,12 @@ class LocalizerConfig:
     # the window that needs stays within max_search_m, for up to max_coast_s. Longer coasts
     # with wider searches were tried on real flights: they accept more look-alikes.
     max_coast_s: float = 30.0
+    # An untrusted track that rejects this many matches within contradiction_window_s, all
+    # pointing to one place, gives up its belief: it dead-reckons, and the place has to win
+    # confirmation like any candidate. Counted as one, a run of matches cannot drag a wrong
+    # window over, so without this the track would wait out max_coast_s.
+    contradiction_matches: int = 3
+    contradiction_window_s: float = 10.0
     trust_sigma_m: float = 10.0  # beyond this uncertainty a track is reported as coasting
     # A position is trusted only with this many independent inlier matches in the window
     # (matches closer than reconfirm_distance_m of flight count once).
@@ -166,6 +172,7 @@ class Localizer:
         self.window: PoseWindow | None = None
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self._lost_at = 0.0
+        self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
         self._window_start = 0.0
@@ -258,23 +265,29 @@ class Localizer:
             same = [h for h in self.hypotheses if self._same_place(h, f)]
             for h in same:
                 h.distinct = max(h.distinct, f.distinctiveness)
-            if same or f.score < cfg.init_min_score or len(self.hypotheses) >= cfg.max_hypotheses:
+            if same or f.score < cfg.init_min_score:
                 continue
-            kf = PoseFilter(
-                cfg.filter,
-                f.x,
-                f.y,
-                f.heading,
-                pos_sigma=cfg.meas_sigma_m,
-                heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
-            )
-            kf.P[:2, :2] += _spread(f)
-            hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
-            hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
-            if fast:
-                hyp.near_track = bool(np.hypot(*(hyp.xy - (x, y))) <= reach)
-            self.hypotheses.append(hyp)
-        if self.hypotheses and self.status is Status.LOST:
+            self._candidate(f, frame.t, fast and bool(np.hypot(f.x - x, f.y - y) <= reach))
+
+    def _candidate(self, f: Fix, t: float, near_track: bool) -> None:
+        """Follow ``f`` (a match on the newest frame) as a candidate location."""
+        cfg = self.cfg
+        if len(self.hypotheses) >= cfg.max_hypotheses:
+            return
+        kf = PoseFilter(
+            cfg.filter,
+            f.x,
+            f.y,
+            f.heading,
+            pos_sigma=cfg.meas_sigma_m,
+            heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
+        )
+        kf.P[:2, :2] += _spread(f)
+        hyp = _Hypothesis(kf, [f.score], t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
+        hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
+        hyp.near_track = near_track
+        self.hypotheses.append(hyp)
+        if self.status is Status.LOST:
             self.status = Status.CONVERGING
             self._frames_in_state = 0
 
@@ -406,7 +419,7 @@ class Localizer:
         w.solve()
         w.trim()
         self.window = w
-        self._window_start = log[first]["t"]
+        self._window_start, self._rejected = log[first]["t"], []
 
     def _track(self, frame: Frame, matchable: bool) -> Fix | None:
         cfg, w = self.cfg, self.window
@@ -446,16 +459,38 @@ class Localizer:
                 self.log[-1]["fix"] = fix
                 if w.nodes[-1].inlier:
                     self._learn(fix, frame)
+                    self._rejected = []
+                elif self._contradicted(frame.t, fix):
+                    self._lose()
+                    # the match that tipped it starts the place's candidacy
+                    self._candidate(fix, frame.t, True)
+                    return None
                 else:
                     fix = None
         w.trim()
         self.compass_offset, self.odometry_scale = w.compass_offset, w.scale
         return fix
 
+    def _trusted(self, w: PoseWindow) -> bool:
+        cfg = self.cfg
+        support = w.support(cfg.reconfirm_distance_m)
+        return w.sigma() <= cfg.trust_sigma_m and support >= cfg.trust_support
+
+    def _contradicted(self, t: float, fix: Fix) -> bool:
+        """Whether matches the untrusted track rejects keep pointing to one other place."""
+        cfg, w = self.cfg, self.window
+        recent = [(s, o) for s, o in self._rejected if t - s <= cfg.contradiction_window_s]
+        self._rejected = [*recent, (t, np.array([fix.x, fix.y]) - w.pose[:2])]
+        if len(self._rejected) < cfg.contradiction_matches or self._trusted(w):
+            return False
+        offsets = np.array([o for _, o in self._rejected])
+        spread = np.hypot(*(offsets - np.median(offsets, axis=0)).T)
+        return bool(np.all(spread <= cfg.matcher.peak_separation_m / 2))
+
     def _lose(self) -> None:
         """Stop matching around the track, but keep dead reckoning it."""
         self.dead_reckoning, self.window = self.window, None
-        self._lost_at, self._searches = self.dead_reckoning.nodes[-1].t, 0
+        self._lost_at, self._searches, self._rejected = self.dead_reckoning.nodes[-1].t, 0, []
         self.status = Status.LOST
         self._frames_in_state = 0
 
@@ -567,13 +602,12 @@ class Localizer:
 
     def _current(self, t: float, fix: Fix | None, latency_ms: float) -> Estimate:
         if self.status is Status.TRACKING and self.window is not None:
-            w, cfg = self.window, self.cfg
-            sigma = w.sigma()
-            support = w.support(cfg.reconfirm_distance_m)
-            trusted = sigma <= cfg.trust_sigma_m and support >= cfg.trust_support
+            w = self.window
             x, y, heading = w.pose
-            status = Status.TRACKING if trusted else Status.COASTING
-            return Estimate(t, status, float(x), float(y), float(heading), sigma, fix, latency_ms)
+            status = Status.TRACKING if self._trusted(w) else Status.COASTING
+            return Estimate(
+                t, status, float(x), float(y), float(heading), w.sigma(), fix, latency_ms
+            )
         if self.dead_reckoning is not None:
             w = self.dead_reckoning
             x, y, heading = w.pose
@@ -584,14 +618,9 @@ class Localizer:
             return Estimate(t, Status.LOST, latency_ms=latency_ms)
         lead = max(self.hypotheses, key=lambda h: h.mean_score)
         x, y, _, _, heading = lead.filter.x
-        status = self.status
-        if status is Status.TRACKING and (
-            not lead.trusted or lead.filter.pos_sigma > self.cfg.trust_sigma_m
-        ):
-            status = Status.COASTING
         return Estimate(
             t,
-            status,
+            self.status,
             float(x),
             float(y),
             float(heading),

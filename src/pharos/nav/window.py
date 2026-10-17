@@ -43,7 +43,9 @@ class WindowConfig:
     span_s: float = 40.0  # frames older than this leave the window (as a prior)...
     min_frames: int = 20  # ...but it always keeps this many (photo sets: seconds apart)
     gyro_sigma_deg: float = 1.5  # error of the reported heading change between frames
-    accel_sigma: float = 2.0  # m/s^2 of body-frame velocity change (manoeuvres, wind in turns)
+    # m/s^2 of body-frame velocity change (manoeuvres, and wind turning with the aircraft):
+    # at 2, dead reckoning 10 s into a real bank was off 36 m with 16 m sigma, at 4, 21 m.
+    accel_sigma: float = 4.0
     compass_sigma_deg: float = 20.0  # absolute heading around reported yaw + learned offset
     compass_walk_deg: float = 5.0  # how far the learned compass offset may move per window
     odometry_gain: float = 1.0  # times the odometry's own sigma

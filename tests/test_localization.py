@@ -137,3 +137,25 @@ def test_lost_track_keeps_dead_reckoning_and_reacquires(small_sim):
     assert evaluate(estimates, rec.truth)["confident_wrong"] == 0
     recovered = [i for i in range(40, len(estimates)) if estimates[i].status is Status.TRACKING]
     assert recovered and recovered[0] <= 40 + 9
+
+
+def test_untrusted_track_gives_way_to_consistent_rejected_matches(small_sim):
+    """Matches the window rejects, all pointing to one place, end an untrusted track."""
+    from pharos.nav.window import PoseWindow, WindowConfig
+    from pharos.types import Fix, Telemetry
+
+    geomap, rec = small_sim
+    tel = Telemetry(170.0, 0.0)
+    for offsets, expected in (
+        ([(35, 0), (36, 2), (34, -1)], True),
+        ([(35, 0), (-40, 10), (5, 45)], False),
+    ):
+        loc = Localizer(geomap, rec.camera)
+        loc.window = PoseWindow(
+            WindowConfig(), 0.0, tel, np.zeros(3), np.diag([400.0, 400.0, 0.01])
+        )
+        results = []
+        for k, (dx, dy) in enumerate(offsets):
+            results.append(loc._contradicted(float(k), Fix(dx, dy, 0.0, 0.4, 0.2, excess=5.0)))
+        assert results[:2] == [False, False]
+        assert results[2] is expected
