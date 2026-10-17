@@ -86,30 +86,31 @@ initial position) against a summer reference map:
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | <10 m | wrong | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 82% | 10.5 | 1.4 | 2.8 | 0.4 | 82% | 0.0% | 142 |
-| autumn_low_sun | 82% | 10.5 | 1.9 | 4.2 | 0.4 | 82% | 0.0% | 107 |
-| dusk_haze | 84% | 9.5 | 2.7 | 21.4 | 0.8 | 75% | 0.0% | 108 |
-| grid_farmland | 83% | 10.0 | 1.6 | 3.2 | 0.4 | 83% | 0.0% | 108 |
-| kitchen_sink | 83% | 10.0 | 2.3 | 6.7 | 1.2 | 82% | 0.0% | 368 |
-| land_change | 83% | 10.0 | 2.3 | 3.8 | 0.5 | 83% | 0.0% | 114 |
-| no_compass_spinning | 83% | 10.0 | 1.1 | 2.7 | 0.1 | 83% | 0.0% | 402 |
-| nominal | 84% | 9.5 | 1.4 | 2.5 | 0.3 | 84% | 0.0% | 119 |
-| sensor_errors | 82% | 10.5 | 6.8 | 8.8 | 0.4 | 82% | 0.0% | 130 |
-| spring_clouds_on_map | 57% | 10.0 | 3.1 | 8.0 | 0.6 | 57% | 0.0% | 111 |
-| tilted_camera | 83% | 10.0 | 1.0 | 2.6 | 0.4 | 83% | 0.0% | 87 |
-| winter_snow | 68% | 19.0 | 1.7 | 3.0 | 0.5 | 68% | 0.0% | 121 |
+| altitude_bias | 82% | 10.5 | 1.4 | 2.8 | 0.4 | 82% | 0.0% | 224 |
+| autumn_low_sun | 83% | 10.0 | 1.9 | 4.2 | 0.4 | 83% | 0.0% | 221 |
+| dusk_haze | 84% | 9.5 | 2.8 | 21.1 | 0.8 | 73% | 0.0% | 227 |
+| grid_farmland | 83% | 10.0 | 1.6 | 3.2 | 0.4 | 83% | 0.0% | 234 |
+| kitchen_sink | 83% | 10.0 | 2.7 | 6.2 | 1.2 | 82% | 0.0% | 860 |
+| land_change | 83% | 10.0 | 2.3 | 3.8 | 0.5 | 83% | 0.0% | 274 |
+| no_compass_spinning | 83% | 10.0 | 1.1 | 2.7 | 0.1 | 83% | 0.0% | 779 |
+| nominal | 84% | 9.5 | 1.4 | 2.5 | 0.3 | 84% | 0.0% | 261 |
+| sensor_errors | 82% | 10.5 | 6.8 | 8.8 | 0.4 | 82% | 0.0% | 213 |
+| spring_clouds_on_map | 58% | 10.0 | 3.1 | 8.6 | 0.7 | 57% | 0.0% | 238 |
+| tilted_camera | 83% | 10.0 | 1.0 | 2.6 | 0.4 | 83% | 0.0% | 202 |
+| winter_snow | 53% | 28.0 | 1.7 | 3.2 | 0.5 | 53% | 0.0% | 217 |
 <!-- bench:end -->
 
 Columns: share of frames in `tracking`, time to first confirmed fix, median
 and 95th-percentile position error while tracking, median heading error,
 share of all frames within 10 m, share of tracking frames more than 25 m off
-(confidently wrong), and median processing time per frame on a 4-core CPU.
+(confidently wrong), and median processing time per frame with four scenarios
+running in parallel on a 4-core CPU.
 
 Availability tops out near 83% because a candidate must cover 120 m of new
 ground (about 10 s) before it is trusted. Lower rows are informative:
 `spring_clouds_on_map` flies under clouds baked into the reference map and
 correctly reports lost there; `winter_snow` needs longer to find a
-distinctive start; `sensor_errors` shows that a 2° camera mount
+distinctive start under the stricter gate that real imagery required; `sensor_errors` shows that a 2° camera mount
 misalignment becomes a ~6 m bias that no single frame can reveal; the
 `dusk_haze` tail is one turn over forest where the filter coasts straight.
 
