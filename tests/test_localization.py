@@ -19,6 +19,15 @@ def test_local_search_recovers_pose(small_sim):
         assert abs(np.degrees(fix.heading - g.heading)) < 2
 
 
+def test_local_search_with_tilted_camera(tilted_sim):
+    geomap, rec = tilted_sim
+    matcher = CorrelationMatcher(geomap, rec.camera)
+    frame, g = rec.frames[4], rec.truth[4]
+    prior = SearchRegion((g.x - 8, g.y + 10), 25, g.heading, np.radians(6))
+    fix = matcher.match(frame, prior)[0]
+    assert np.hypot(fix.x - g.x, fix.y - g.y) < 6
+
+
 def test_global_search_with_unknown_heading(small_sim):
     geomap, rec = small_sim
     matcher = CorrelationMatcher(geomap, rec.camera)

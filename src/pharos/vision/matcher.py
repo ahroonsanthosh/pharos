@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from pharos.geomap import GeoMap
-from pharos.geometry import Camera, wrap_angle
+from pharos.geometry import Camera, rot2, wrap_angle
 from pharos.types import Fix, Frame
 from pharos.vision.correlate import Correlator, find_peaks, parabola_offset, subpixel
 from pharos.vision.features import FeatureConfig, orientation_field
@@ -171,10 +171,13 @@ class CorrelationMatcher:
         if center is None or not np.isfinite(radius):
             u0, v0, u1, v1 = -R, -R, W + R, H + R
         else:
-            cu, cv = self.map.world_to_px(np.asarray(center), level)
-            span = radius / gsd + R
-            u0, v0 = int(np.floor(cu - span)), int(np.floor(cv - span))
-            u1, v1 = int(np.ceil(cu + span)) + 1, int(np.ceil(cv + span)) + 1
+            # ``center`` is the aircraft; the template is centred on the optical-axis
+            # ground point, which sits ahead of it when the camera is tilted.
+            offsets = [rot2(h) @ fps[s].center for h in headings for s in scales]
+            px = self.map.world_to_px(np.asarray(center) + np.array(offsets), level)
+            lo = np.floor(px.min(0) - radius / gsd - R).astype(int)
+            hi = np.ceil(px.max(0) + radius / gsd + R).astype(int) + 1
+            (u0, v0), (u1, v1) = lo, hi
         roi, valid = _crop(feat, u0, v0, u1, v1)
         if roi.shape[0] < mask_t.shape[0] or roi.shape[1] < mask_t.shape[1] or not valid.any():
             return None

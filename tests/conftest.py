@@ -15,3 +15,14 @@ def small_sim():
         trajectory=TrajectorySpec(duration_s=30, margin_m=170, altitude=170),
     )
     return simulate(sc)
+
+
+@pytest.fixture(scope="session")
+def tilted_sim():
+    """Forward-tilted camera: the matched patch sits ~70 m ahead of the aircraft."""
+    sc = Scenario(
+        seed=43,
+        world=WorldSpec(size_m=700, villages=2, buildings_per_village=20),
+        trajectory=TrajectorySpec(duration_s=5, margin_m=200, altitude=150, tilt_deg=25),
+    )
+    return simulate(sc)
