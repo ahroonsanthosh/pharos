@@ -142,8 +142,12 @@ LOG_FORMATS = {
 }
 
 
-def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=True):
-    """12 s of level flight heading east, banked ``roll`` degrees; 3D fix from 2 s."""
+def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=True, locked=None):
+    """12 s of level flight heading east, banked ``roll`` degrees; 3D fix from 2 s.
+
+    ``locked``: every other mount row is logged as these (roll, pitch, yaw) instead,
+    the way ArduPilot writes a mount at gimbal lock.
+    """
     lines = ["FMT, 128, 89, FMT, BBnNZ, Type,Length,Name,Format,Columns"]
     for i, (name, (fmt, cols)) in enumerate(LOG_FORMATS.items()):
         lines.append(f"FMT, {129 + i}, 0, {name}, {fmt}, {cols}")
@@ -155,7 +159,8 @@ def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=Tr
             lines.append(f"GPS, {us}, 0, {status}, {us // 1000}, 2400, {41.7 + k * 1e-5}, -0.7")
         lines.append(f"ATT, {us}, {roll}, 0.0, 90.0")
         if mount is not None:
-            lines.append(f"MNT, {us}, 0, {mount[0]}, {mount[1]}, {mount[2]}")
+            m = locked if locked is not None and k % 2 else mount
+            lines.append(f"MNT, {us}, 0, {m[0]}, {m[1]}, {m[2]}")
         lines.append(f"POS, {us}, 100.0")
         if terrain and k % 10 == 0:
             lines.append(f"TERR, {us}, 2, 110.0")
@@ -188,3 +193,14 @@ def test_dataflash_stabilized_gimbal_and_fixed_camera(tmp_path):
     fixed = write_log(tmp_path / "fixed.log", mount=None, roll=0.0)
     tel = DataflashTelemetry(fixed, mount_pitch=math.radians(15)).at(1.0).telemetry
     assert np.degrees([tel.pitch, tel.roll]) == pytest.approx([15.0, 0.0], abs=1e-4)
+
+
+def test_dataflash_mount_at_gimbal_lock(tmp_path):
+    pytest.importorskip("pymavlink")
+    log = write_log(
+        tmp_path / "lock.log", mount=(0.0, -89.0, 3.0), roll=0.0, locked=(-90.0, -90.0, -90.0)
+    )
+    telemetry = DataflashTelemetry(log)
+    for t in np.arange(0.0, 3.0, 0.05):
+        yaw = math.degrees(telemetry.at(t).telemetry.yaw)
+        assert yaw == pytest.approx(93.0, abs=0.5)  # east + 3, never turned around

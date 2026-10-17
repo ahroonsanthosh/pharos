@@ -177,6 +177,8 @@ def _sync(args) -> None:
         f"--log-sync {args.log_sync + result.offset_s:.2f}  (odometry jitter "
         f"{result.jitter_m:.2f} m, {result.initial_jitter_m:.2f} m at {args.log_sync:.2f})"
     )
+    if result.contrast < 0.15:
+        print("warning: weak minimum; pick a stretch with turns, or a longer one")
 
 
 def _simulate(args) -> None:

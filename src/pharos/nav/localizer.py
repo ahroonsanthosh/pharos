@@ -62,7 +62,11 @@ class LocalizerConfig:
     # the window that needs stays within max_search_m, for up to max_coast_s.
     max_coast_s: float = 30.0
     trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
-    reconfirm_frames: int = 2  # consecutive matches needed to trust a track again after coasting
+    # Trusting a track again after coasting takes consecutive matches spread over this much
+    # ground: overlapping frames see the same look-alike, so they are not independent.
+    reconfirm_frames: int = 2
+    reconfirm_distance_m: float = 40.0
+    untrusted_meas_inflation: float = 4.0  # one match must not collapse an untrusted track
     meas_sigma_m: float = 3.0
     meas_heading_sigma_deg: float = 2.0
     search_sigmas: float = 3.0
@@ -71,7 +75,9 @@ class LocalizerConfig:
     min_heading_span_deg: float = 6.0  # at least three fine heading steps
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
-    odometry_gain_range: tuple[float, float] = (0.7, 4.0)  # bounds on learned odometry noise
+    # Bounds on the learned odometry noise factor. It only inflates the error model: averaged
+    # innovations hide the rare bad steps (RANSAC on the wrong cluster, a bank started mid-step).
+    odometry_gain_range: tuple[float, float] = (1.0, 4.0)
 
 
 def usable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
@@ -90,6 +96,7 @@ class _Hypothesis:
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
     near_lost_track: bool = False  # found where a just-lost track could have flown to
     streak: int = 0  # consecutive matches
+    streak_from: np.ndarray | None = None  # position at the first match of the streak
 
     @property
     def mean_score(self) -> float:
@@ -134,9 +141,11 @@ class Localizer:
         self._motion = None
         if self.odometry is not None:
             if usable:
-                self._motion = self.odometry.step(frame, self.scale)
+                self._motion = self._plausible(self.odometry.step(frame, self.scale), frame.t)
             else:
                 self.odometry.reset()
+                for h in self.hypotheses:
+                    h.streak = 0  # no look at the ground breaks a run of matches
         if self.status is Status.LOST:
             # Consecutive frames overlap heavily, so searching every frame buys little.
             if usable and self._frames_in_state % self.cfg.lost_search_every == 0:
@@ -261,8 +270,9 @@ class Localizer:
             kf.predict_motion(dt, m.d_body, m.d_heading, g * m.sigma_m, g * m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
-        if kf.pos_sigma > cfg.trust_sigma_m:
+        if kf.pos_sigma > cfg.trust_sigma_m and h.trusted:
             h.trusted = False  # a wide search must be confirmed before it is trusted again
+            h.streak = 0
 
     def _measure(self, h: _Hypothesis, frame: Frame) -> Fix | None:
         cfg, kf, m = self.cfg, h.filter, self._motion
@@ -289,24 +299,41 @@ class Localizer:
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
             R = np.diag([cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, sigma_h**2])
-            R[:2, :2] += _spread(fix)  # a ridge-shaped peak fixes position only across it
+            spread = _spread(fix)
+            R[:2, :2] += spread  # a ridge-shaped peak fixes position only across it
+            compact = np.linalg.eigvalsh(spread)[-1] <= cfg.meas_sigma_m**2
+            if not h.trusted:
+                R[:2, :2] *= cfg.untrusted_meas_inflation
             z = np.array([fix.x, fix.y, fix.heading])
             nu, S, _ = kf.innovation(z, R)
             if not kf.update(z, R):
                 fix = None
-            elif m is not None and self.status is Status.TRACKING and h.trusted:
+            elif m is not None and self.status is Status.TRACKING and h.trusted and compact:
+                # only sharp peaks: a ridge's own spread would make odometry look better than it is
                 self._learn_odometry(float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2])))
         h.scores.append(fix.score if fix is not None else 0.0)
-        h.streak = h.streak + 1 if fix is not None else 0
-        if not h.trusted and h.streak >= cfg.reconfirm_frames:
+        if fix is None:
+            h.streak, h.streak_from = 0, None
+            return None
+        if h.streak == 0:
+            h.streak_from = h.xy
+        h.streak += 1
+        moved = float(np.hypot(*(h.xy - h.streak_from)))
+        if h.streak >= cfg.reconfirm_frames and moved >= cfg.reconfirm_distance_m:
             h.trusted = True
-        if fix is not None:
-            if h.last_hit_xy is not None:
-                h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
-            h.last_hit_t, h.last_hit_xy = frame.t, h.xy
+        if h.last_hit_xy is not None:
+            h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
+        h.last_hit_t, h.last_hit_xy = frame.t, h.xy
         return fix
 
     # -- helpers ----------------------------------------------------------
+
+    def _plausible(self, m: Motion | None, t: float) -> Motion | None:
+        """Odometry, unless it implies an impossible speed (RANSAC on a wrong cluster)."""
+        if m is None or self._last_t is None:
+            return m
+        dt = t - self._last_t
+        return m if np.hypot(*m.d_body) <= self.cfg.max_speed * dt else None
 
     def _reach(self, t: float) -> float | None:
         """How far the aircraft can be from the last match of a recently lost track."""

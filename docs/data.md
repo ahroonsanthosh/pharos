@@ -75,8 +75,11 @@ recording format above is only needed for simulated flights.
   logs are not read yet.
 * **Syncing a log to a video:** camera and autopilot rarely share a clock.
   `--log-sync` is the time from the log's first 3D GNSS fix to the first
-  video frame; find it once per flight, for example from the takeoff. A
-  small error acts like a forward camera tilt, which calibration absorbs.
+  video frame. Guess it to within a second or two (from the takeoff, say),
+  then `pharos sync video.mkv --log flight.bin --log-sync GUESS --hfov H
+  --start S` refines it from two minutes of footage without using GNSS.
+  Getting it right matters: 0.3 s off doubled the odometry error on a real
+  fixed-wing flight, because every frame got the bank angle of another moment.
 * **Calibration, once per camera:** run `pharos probe` on a flight with
   GNSS. Its `calibration` block gives the camera's mount misalignment
   (`--mount-offset FORWARD RIGHT`, degrees) and the scale error, both as

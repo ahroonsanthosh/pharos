@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pytest
 
 from pharos.vision.correlate import (
     Correlator,
@@ -84,3 +85,8 @@ def test_peak_covariance_is_long_along_a_ridge():
     assert np.sqrt(np.linalg.eigvalsh(sharp_cov).max()) < 2
     assert ridge_cov[1, 1] > 100 * ridge_cov[0, 0]  # spread along columns only
     assert np.sqrt(ridge_cov[1, 1]) > 15
+    # the ridge leaves the window, so how far it extends along itself is unknown
+    open_cov = peak_covariance(ridge, 50, 50, rho=5, open_variance=1e4)
+    assert open_cov[1, 1] == pytest.approx(1e4, rel=0.01)
+    assert open_cov[0, 0] == pytest.approx(ridge_cov[0, 0], abs=0.1)
+    assert peak_covariance(sharp, 50, 50, rho=5, open_variance=1e4)[1, 1] < 4

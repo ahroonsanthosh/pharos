@@ -85,3 +85,17 @@ def test_frames_on_the_ground_or_facing_the_horizon_are_skipped(small_sim):
     assert all(e.status is Status.LOST for e in early)
     estimates = [loc.process(f) for f in rec.frames]
     assert estimates[-1].status is Status.TRACKING
+
+
+def test_odometry_implying_impossible_speed_is_ignored(small_sim):
+    import numpy as np
+
+    from pharos.vision.odometry import Motion
+
+    geomap, rec = small_sim
+    loc = Localizer(geomap, rec.camera)
+    loc._last_t = 10.0
+    step = Motion(np.array([0.0, 9.0]), 0.0, 3.0, 0.01, 100, 1.0)
+    jump = Motion(np.array([0.0, 37.0]), 0.0, 6.8, 0.01, 100, 1.0)  # 74 m/s
+    assert loc._plausible(step, 10.5) is step
+    assert loc._plausible(jump, 10.5) is None

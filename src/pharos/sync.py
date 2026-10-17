@@ -4,7 +4,10 @@ A separate camera and autopilot share no clock. With the wrong offset every
 frame is paired with the airframe attitude of another moment, so while the
 aircraft rolls and pitches, the ground under each frame is placed wrongly and
 visual odometry measures a jerky path. Aircraft do not fly jerkily: the offset
-at which consecutive odometry steps agree best is the sync. No GNSS needed.
+at which consecutive odometry steps agree best is the sync. No GNSS needed,
+but the stretch of flight must contain attitude changes (a few turns, or the
+wobble of a fixed-wing); steady straight flight or a stabilized gimbal leaves
+no signal, which a low ``contrast`` reports.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ class SyncResult:
     offset_s: float  # telemetry for video time t is at telemetry time t + offset_s
     jitter_m: float  # median change between consecutive odometry steps at that offset
     initial_jitter_m: float  # the same at the pairing given (offset 0)
+    contrast: float  # 1 - best / median jitter; below ~0.15 the minimum is not trustworthy
     curve: list[tuple[float, float]]  # (offset, jitter) for every offset tried
 
 
@@ -79,7 +83,10 @@ def estimate_sync(
     offset = min(curve, key=curve.get)
     if not np.isfinite(curve[offset]):
         raise ValueError("too few overlapping frames with telemetry to estimate the sync")
-    return SyncResult(offset, curve[offset], curve.get(0.0, jitter(0.0)), sorted(curve.items()))
+    finite = [v for v in curve.values() if np.isfinite(v)]
+    contrast = 1.0 - curve[offset] / float(np.median(finite))
+    initial = curve.get(0.0, jitter(0.0))
+    return SyncResult(offset, curve[offset], initial, contrast, sorted(curve.items()))
 
 
 def _usable(a, b) -> bool:

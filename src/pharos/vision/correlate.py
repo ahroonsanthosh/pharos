@@ -98,20 +98,34 @@ def peak_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
     return float((score[r, c] - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
 
 
-def peak_covariance(score: np.ndarray, r: int, c: int, rho: float) -> np.ndarray:
+def peak_covariance(
+    score: np.ndarray, r: int, c: int, rho: float, open_variance: float = 0.0
+) -> np.ndarray:
     """Spread (2x2, pixels squared, row/column) of the offsets that score as well as the peak.
 
-    Offsets within one noise sigma of the peak are about as plausible as the
-    peak itself. Their second moment about the peak is small for a sharp peak
-    but long along a ridge (a straight edge seen along its length, which fixes
-    position only across it) and between repeats of a repeated pattern.
+    Offsets within noise of the peak (one robust sigma, or a tenth of the
+    peak's height above the median) are about as plausible as the peak itself.
+    Their second moment about the peak is small for a sharp peak but long
+    along a ridge (a straight edge seen along its length, which fixes position
+    only across it) and between repeats of a repeated pattern. A ridge that
+    runs out of the window is longer than measured: its variance along it is
+    raised to ``open_variance``.
     """
     noise = _noise(score, r, c, rho)
     if noise is None:
         return np.zeros((2, 2))
-    rows, cols = np.nonzero(score >= score[r, c] - noise[1])
+    mu, sigma, _ = noise
+    peak = score[r, c]
+    rows, cols = np.nonzero(score >= peak - max(sigma, 0.1 * (peak - mu)))
     d = np.column_stack([rows - r, cols - c]).astype(float)
-    return d.T @ d / len(d)
+    cov = d.T @ d / len(d)
+    h, w = score.shape
+    edge = rho  # within a correlation length of the window's edge
+    if min(rows.min(), cols.min()) < edge or rows.max() >= h - edge or cols.max() >= w - edge:
+        ev, vec = np.linalg.eigh(cov)
+        if ev[1] > 4 * max(ev[0], 1e-9) and ev[1] < open_variance:  # elongated
+            cov = vec @ np.diag([ev[0], open_variance]) @ vec.T
+    return cov
 
 
 def _noise(score: np.ndarray, r: int, c: int, rho: float) -> tuple[float, float, int] | None:

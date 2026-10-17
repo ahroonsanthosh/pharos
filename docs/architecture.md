@@ -30,10 +30,11 @@ GNSS and no learned weights, and it runs on a CPU.
 | `nav.localizer` | Multi-hypothesis acquisition, confirmation and tracking state machine. |
 | `sim.*` | Procedural world, seasonal/lighting appearance, trajectories, sensor models, rendering. |
 | `eval.*` | Metrics, track plots, scenario benchmark. |
-| `telemetry` | Manual, DJI `.SRT` and live MAVLink telemetry sources. |
+| `telemetry` | Manual, DJI `.SRT`, ArduPilot `.bin` log and live MAVLink telemetry sources. |
 | `footage`, `analyze` | Recorded videos and photo sets (EXIF, DJI and senseFly XMP) localized offline, with exports. |
+| `sync` | Finds where a video starts in its flight log, from the footage alone. |
 | `server.*` | Live service: feed runner (any video source + telemetry), map store, FastAPI app and dashboard. |
-| `cli` | `pharos simulate`, `pharos localize`, `pharos bench`, `pharos serve`. |
+| `cli` | `pharos analyze`, `probe`, `sync`, `serve`, `simulate`, `localize`, `bench`. |
 
 ## Conventions
 
@@ -94,6 +95,16 @@ best of that many noise samples would reach (`correlate.peak_excess`). On the
 real Aukerman photos this passes 74% of true windows and 10% of wrong ones per
 frame, and confirmation needs several in a row.
 
+**Uncertainty from the peak's shape.** Flying along a straight field edge or
+road, the correlation peak is a ridge: the match fixes position across the
+edge but hardly along it, and a second bump on the same ridge can score as
+well as the true one. Each match therefore reports the spread of all offsets
+that score within noise of its peak, and the filter uses that as the
+measurement covariance. A ridge corrects only the cross-track position, and a
+track whose along-track uncertainty has grown is reported as coasting until a
+match with a compact peak pins it down. On real farmland video this removed
+a lock-on 70 to 480 m off.
+
 **Multiple hypotheses before commitment.** Consecutive frames overlap almost
 entirely, so a look-alike place that fools one frame fools the next several
 too. The localizer keeps up to four candidate locations, tracks each with
@@ -127,6 +138,14 @@ candidate found there needs fewer confirmations: continuity is evidence too.
 **Self-calibration.** Accepted fixes slowly update the altitude scale (baro
 bias) and the compass offset (magnetic bias). The compass is otherwise used
 only for frame-to-frame heading changes and as a loose prior when lost.
+
+**Calibration once per camera.** What cannot be learned in flight is
+measured once on a flight with GNSS. `pharos sync` finds the offset between
+a separate camera's video and the autopilot log without GNSS: a wrong offset
+pairs frames with the attitude of another moment, which makes visual
+odometry jerky, so the smoothest offset wins (on a real flight it found the
+published sync 0.34 s off). `pharos probe` then reports the mount
+misalignment and the effective field of view from confident matches.
 
 ## Extending
 

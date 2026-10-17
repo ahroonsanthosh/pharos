@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import Protocol
 
@@ -58,6 +58,7 @@ class MatcherConfig:
     peak_separation_m: float = 40.0  # peaks closer than this are the same place
     sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
     min_overlap: float = 0.75
+    open_ridge_m: float = 150.0  # along-ridge uncertainty of a ridge leaving the search window
 
 
 @dataclass
@@ -170,7 +171,8 @@ class CorrelationMatcher:
         rho = 2 * cfg.features.smooth
         excess = peak_excess(res.best, r, c, rho)
         # rows run south: (row, col) pixels to (east, north) metres
-        (crr, crc), (_, ccc) = peak_covariance(res.best, r, c, rho) * gsd**2
+        open_variance = (cfg.open_ridge_m / gsd) ** 2
+        (crr, crc), (_, ccc) = peak_covariance(res.best, r, c, rho, open_variance) * gsd**2
         spread = (float(ccc), float(-crc), float(crr))
         return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est, excess, spread)
 
@@ -297,5 +299,5 @@ def _with_distinctiveness(fixes: list[Fix], separation: float) -> list[Fix]:
             )
         ]
         d = _distinct(f.score, max(rivals, default=0.0))
-        out.append(Fix(f.x, f.y, f.heading, f.score, d, f.scale, f.excess))
+        out.append(replace(f, distinctiveness=d))
     return out

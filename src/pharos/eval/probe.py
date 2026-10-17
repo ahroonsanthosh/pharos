@@ -113,7 +113,7 @@ def summarize_probe(rows: list[dict], cfg: ProbeConfig | None = None) -> dict:
     good = [r for r in rows if "calibration_offset_m" in r]
     if good:
         right, forward = np.median([r["calibration_offset_m"] for r in good], axis=0)
-        height = float(np.median([r["altitude_m"] for r in good]))
+        height = float(np.median([r["altitude_m"] * r["scale"] for r in good]))
         out["calibration"] = {
             "frames": len(good),
             # tilt the camera by this much more (forward, right) to cancel the offset

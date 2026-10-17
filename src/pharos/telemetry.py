@@ -172,7 +172,7 @@ class DataflashTelemetry:
         terrain = series["TERR"][series["TERR"][:, 1] == _TERRAIN_OK]
         self._height = terrain[:, [0, 2]] if len(terrain) else series["POS"]
         mount = series["MNT"][~np.isnan(series["MNT"][:, 2])]
-        self._mount = np.column_stack([mount[:, 0], np.radians(np.nan_to_num(mount[:, 1:]))])
+        self._mount = _mount_angles(mount[:, 0], np.radians(np.nan_to_num(mount[:, 1:])))
         self._mount_body_frame = params.get("MNT1_TYPE") == 1
         self.mount_pitch = mount_pitch
 
@@ -205,6 +205,27 @@ class DataflashTelemetry:
         pass
 
 
+def _mount_angles(t: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """Time, roll, pitch, yaw rows with the roll and yaw of gimbal lock repaired.
+
+    Pointing straight down (pitch -90) a gimbal's roll and yaw describe the
+    same rotation, and ArduPilot's logged Euler angles there are numerically
+    meaningless: a servo mount at roll 0, yaw 3 logs roll -90, yaw -90, a
+    camera turned 180 degrees. Those rows take roll and yaw from the nearest
+    earlier well-defined row (the next one at the start of the log).
+    """
+    good = np.abs(angles[:, 1]) < np.radians(89.5)
+    if good.any() and not good.all():
+        index = np.where(good, np.arange(len(good)), -1)
+        index = np.maximum.accumulate(index)
+        index[index < 0] = np.argmax(good)
+        angles = angles.copy()
+        angles[:, [0, 2]] = angles[index][:, [0, 2]]
+    elif not good.any():
+        angles = angles * np.array([0.0, 1.0, 0.0])
+    return np.column_stack([t, angles])
+
+
 def _read_dataflash(path: Path) -> tuple[dict[str, np.ndarray], dict[str, float]]:
     """Time (s) and fields of the messages in ``_LOG_FIELDS``, plus parameters."""
     from pymavlink import mavutil  # optional dependency
@@ -218,7 +239,8 @@ def _read_dataflash(path: Path) -> tuple[dict[str, np.ndarray], dict[str, float]
             if kind == "PARM":
                 params[msg.Name] = msg.Value
             elif getattr(msg, "I", 0) == 0:  # first GPS receiver and mount
-                rows[kind].append([msg.TimeUS / 1e6, *(getattr(msg, f) for f in _LOG_FIELDS[kind])])
+                values = (getattr(msg, f, math.nan) for f in _LOG_FIELDS[kind])  # older logs
+                rows[kind].append([msg.TimeUS / 1e6, *values])
     finally:
         log.close()
     series = {
