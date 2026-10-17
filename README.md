@@ -74,13 +74,17 @@ pharos serve --open                        # dashboard without Docker
 3. **Correlate.** FFT cross-correlation scores every position at once, over a
    set of heading and altitude-scale hypotheses.
 4. **Localize.** When lost, a global search proposes candidates. Several are
-   followed in parallel until one clearly wins over 120 m of flight. After
-   that, a Kalman filter tracks with cheap local searches, driven by visual
-   odometry between consecutive frames, and slowly learns barometric and
-   compass bias.
+   followed in parallel until one clearly wins over 120 m of flight. A
+   confirmed track is the last 40 s of frames solved jointly from visual
+   odometry, gyro, compass and map matches, so a look-alike match is
+   outvoted; it learns the odometry scale and compass bias as it flies. When
+   matches stop, it dead-reckons with an uncertainty that grows honestly and
+   looks for the track again only where that leaves the aircraft. Recorded
+   footage is solved as a whole flight, bridging gaps from both sides.
 
-Each estimate carries a status: `lost`, `converging` (a candidate, not yet
-trustworthy) or `tracking`. Details and design rationale are in
+Each estimate carries a status: `tracking` (trusted), `coasting` (a
+position with an honest uncertainty, not trusted), `converging` (a candidate,
+not yet a position) or `lost`. Details and design rationale are in
 [docs/architecture.md](docs/architecture.md).
 
 ## Maps

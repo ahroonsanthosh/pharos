@@ -64,7 +64,10 @@ class WindowConfig:
     # Errors shared by all matches (calibration residuals, attitude timing) do not average
     # out over many matches; reported uncertainties include this much in quadrature.
     systematic_sigma_m: float = 3.0
-    marginal_inflation: float = 1.5  # dropped frames leave their information as a looser prior
+    # Information leaving the window is loosened by this factor per span of time it covered
+    # (a forgetting factor against linearization error), not per frame: compounded per frame,
+    # a track without matches would forget where it was within one span.
+    marginal_inflation: float = 1.5
     iterations: int = 8
 
 
@@ -80,6 +83,7 @@ class Node:
 
 
 _V = 4  # unknowns per frame: x, y, heading, odometry scale
+_PRIOR_ANGLES = [2, _V + 2, 2 * _V]  # headings and compass offset in a two-frame prior
 
 
 class PoseWindow:
@@ -98,13 +102,15 @@ class PoseWindow:
         self.cfg = cfg
         self.nodes = [Node(t, tel, pose=np.asarray(pose, float).copy(), scale=scale)]
         self.compass_offset = compass_offset
-        # Joint prior on (oldest x, y, heading, scale, compass offset): mean and whitener.
+        # Joint prior on the oldest frames (x, y, heading, scale each) and the compass offset:
+        # mean, whitener and the number of frames. Dropped frames leave it on the two oldest
+        # kept ones, so the velocity across the cut is not lost with them.
         prior_cov = np.zeros((5, 5))
         prior_cov[:3, :3] = cov
         prior_cov[3, 3] = cfg.scale_sigma**2
         prior_cov[4, 4] = math.radians(4 * cfg.compass_walk_deg) ** 2
         mean = np.concatenate([pose, [scale, compass_offset]])
-        self.prior = (mean, _whitener(prior_cov))
+        self.prior = (mean, _whitener(prior_cov), 1)
         self.covs: list[np.ndarray] = [np.asarray(cov, float).copy()]  # marginal per node
 
     @property
@@ -147,7 +153,7 @@ class PoseWindow:
 
     def trim(self) -> None:
         """Drop frames older than the span; their information stays as a prior on the oldest."""
-        cut, most = 0, len(self.nodes) - max(self.cfg.min_frames, 1)
+        cut, most = 0, len(self.nodes) - max(self.cfg.min_frames, 2)
         while cut < most and self.nodes[-1].t - self.nodes[cut].t > self.cfg.span_s:
             cut += 1
         if not cut:
@@ -156,24 +162,25 @@ class PoseWindow:
         self.nodes, self.covs = self.nodes[cut:], self.covs[cut:]
         self.nodes[0].motion = None  # its link to dropped frames is inside the prior now
 
-    def _marginalize(self, cut: int) -> tuple[np.ndarray, np.ndarray]:
-        """Prior on (frame ``cut``, compass offset) from the factors of frames before it.
+    def _marginalize(self, cut: int) -> tuple[np.ndarray, np.ndarray, int]:
+        """Prior on (frames ``cut`` and ``cut + 1``, compass offset) from the dropped frames.
 
         Schur complement of the dropped frames, over only the factors that leave the
-        window with them, so evidence still in the window is not counted twice. A
-        factor reaching past ``cut`` from a dropped frame is let go (the motion prior
-        across the boundary): losing it is conservative.
+        window with them, so evidence still in the window is not counted twice. Every
+        such factor reaches at most two frames past a dropped one (the motion prior), so
+        none is lost.
         """
         n = len(self.nodes)
         x = self._state()
         r, J = self._linearize(x)
         J = J.tocsr()
         dropped = _V * cut
-        kept = [dropped, dropped + 1, dropped + 2, dropped + 3, _V * n]
+        kept = [*range(dropped, dropped + 2 * _V), _V * n]
+        known = set(kept)
         rows = []
         for i in range(J.shape[0]):
             cols = J.indices[J.indptr[i] : J.indptr[i + 1]]
-            if cols.min() < dropped and all(c < dropped or c in kept for c in cols):
+            if cols.min() < dropped and all(c < dropped or c in known for c in cols):
                 rows.append(i)
         Js = J[rows][:, list(range(dropped)) + kept].toarray()
         rs = r[rows]
@@ -182,15 +189,18 @@ class PoseWindow:
         A = np.linalg.solve(Hdd + _DAMPING * np.eye(dropped), Hdm)
         info = Hmm - Hdm.T @ A
         grad = g[dropped:] - A.T @ g[:dropped]
-        # Rounding can leave an unobserved direction slightly negative: clip, do not invert it.
+        # Rounding can leave an unobserved direction slightly negative: clip, do not invert
+        # it, and do not move the mean along it.
         ev, vec = np.linalg.eigh(0.5 * (info + info.T))
+        informed = ev > _MIN_INFORMATION
         ev = np.maximum(ev, _MIN_INFORMATION)
-        mean = x[kept] - vec @ ((vec.T @ grad) / ev)
-        mean[2], mean[4] = wrap_angle(mean[2]), wrap_angle(mean[4])
-        walk = np.zeros((5, 5))  # the compass offset drifts a little over time
-        walk[4, 4] = math.radians(self.cfg.compass_walk_deg) ** 2
-        cov = (vec / ev) @ vec.T * self.cfg.marginal_inflation + walk
-        return mean, _whitener(cov)
+        mean = x[kept] - vec @ np.where(informed, (vec.T @ grad) / ev, 0.0)
+        mean[_PRIOR_ANGLES] = wrap_angle(mean[_PRIOR_ANGLES])
+        covered = (self.nodes[cut].t - self.nodes[0].t) / self.cfg.span_s
+        walk = np.zeros((len(kept), len(kept)))  # the compass offset drifts a little over time
+        walk[-1, -1] = math.radians(self.cfg.compass_walk_deg) ** 2 * covered
+        cov = (vec / ev) @ vec.T * self.cfg.marginal_inflation**covered + walk
+        return mean, _whitener(cov), 2
 
     # -- solving ----------------------------------------------------------
 
@@ -300,11 +310,13 @@ class PoseWindow:
         yaw = np.array([np.nan if nd.tel.yaw is None else nd.tel.yaw for nd in nodes])
         tilt = np.array([nd.tel.tilt for nd in nodes])
 
-        # prior on the oldest frame and the compass offset
-        mean, W = self.prior
-        e = x[[0, 1, 2, 3, ic]] - mean
-        e[2], e[4] = wrap_angle(e[2]), wrap_angle(e[4])
-        b.block(W @ e, np.array([0, 1, 2, 3, ic]), W)
+        # prior on the oldest frames and the compass offset
+        mean, W, frames = self.prior
+        cols = np.array([*range(_V * frames), ic])
+        angles = [*range(2, _V * frames, _V), _V * frames]
+        e = x[cols] - mean
+        e[angles] = wrap_angle(e[angles])
+        b.block(W @ e, cols, W)
 
         # odometry: true step / scale = measured step (the noise is in the measurement)
         k = np.array([i for i in range(1, n) if nodes[i].motion is not None], int)
@@ -359,7 +371,9 @@ class PoseWindow:
             J = np.stack([-1 / sg, 1 / sg], 1)[:, None, :]
             b.block(res[:, None], np.stack([col[k - 1] + 2, col[k] + 2], 1), J)
 
-        # motion: body-frame velocity changes slowly
+        # motion: body-frame velocity changes slowly. Judged in odometry units (divided by
+        # the scale): in metres, shrinking every step would shrink the accelerations that
+        # odometry noise implies, and without matches the scale would collapse towards zero.
         if n >= 3:
             k = np.arange(2, n)
             dt1, dt2 = t[k - 1] - t[k - 2], t[k] - t[k - 1]
@@ -369,7 +383,7 @@ class PoseWindow:
                 Ra, dRa = _rt(F[k - 2, 2])
                 Rm, dRm = _rt(F[k - 1, 2])
                 d1, d2 = F[k - 1, :2] - F[k - 2, :2], F[k, :2] - F[k - 1, :2]
-                s = cfg.accel_sigma * 0.5 * (dt1 + dt2)
+                s = cfg.accel_sigma * 0.5 * (dt1 + dt2) * F[k, 3]
                 v1 = np.einsum("kab,kb->ka", Ra, d1) / dt1[:, None]
                 v2 = np.einsum("kab,kb->ka", Rm, d2) / dt2[:, None]
                 res = (v2 - v1) / s[:, None]
@@ -381,11 +395,12 @@ class PoseWindow:
                         -Rm * q2 - Ra * q1,
                         np.einsum("kab,kb->ka", dRm, d2)[..., None] * q2,
                         Rm * q2,
+                        (-res / F[k, 3:4])[..., None],
                     ],
                     axis=2,
                 )
                 a, m_, c = col[k - 2], col[k - 1], col[k]
-                cols = np.stack([a, a + 1, a + 2, m_, m_ + 1, m_ + 2, c, c + 1], 1)
+                cols = np.stack([a, a + 1, a + 2, m_, m_ + 1, m_ + 2, c, c + 1, c + 3], 1)
                 b.block(res, cols, J)
 
         # compass: heading near the reported yaw plus the learned offset

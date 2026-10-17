@@ -30,8 +30,8 @@ def integrity(
 ) -> dict[str, float]:
     """Coverage, misleading rate, sigma calibration and the longest untrusted gap.
 
-    ``located`` marks frames with any position (trusted or coasting): with an honest
-    sigma, a coasting position is still a usable one.
+    ``located`` marks frames with a confirmed track's position, trusted or coasting (not
+    a converging candidate): with an honest sigma, a coasting position is still usable.
     """
     n = len(t)
     out = {
@@ -87,5 +87,7 @@ def evaluate(estimates: Sequence[Estimate], truth: Sequence[GroundTruth]) -> dic
         err,
         trk,
         np.array([e.sigma_xy for e in estimates]),
-        np.array([e.status is not Status.LOST and np.isfinite(e.x) for e in estimates]),
+        np.array(
+            [e.status in (Status.TRACKING, Status.COASTING) and np.isfinite(e.x) for e in estimates]
+        ),
     )

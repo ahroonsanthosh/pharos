@@ -95,7 +95,11 @@ def rectify(
         img = cv2.GaussianBlur(img, (0, 0), 0.5 * ratio)
     n = 2 * r + 1
     return cv2.warpPerspective(
-        img, H, (n, n), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderValue=0
+        img,
+        H,
+        (n, n),
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_REPLICATE,
     )
 
 

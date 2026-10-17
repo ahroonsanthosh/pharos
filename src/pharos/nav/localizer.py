@@ -13,7 +13,10 @@ candidate has clearly out-scored the others over a minimum distance.
 
 A confirmed track is a sliding window of recent frames (``nav.window``) solved
 jointly from odometry, heading and map matches, so a look-alike match is
-outvoted by the rest of the window. For recorded footage, ``smooth`` solves the
+outvoted by the rest of the window. When a track is lost, its window keeps
+dead reckoning: the position is still reported (as coasting) with an
+uncertainty that grows honestly, and the search for a new track is confined
+to where that uncertainty allows. For recorded footage, ``smooth`` solves the
 whole flight at once, bridging gaps from both sides.
 """
 
@@ -59,11 +62,13 @@ class LocalizerConfig:
     max_hypotheses: int = 4
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
-    # After losing a confirmed track, search where the aircraft can have flown since,
-    # and confirm a candidate there with fewer matches (continuity is evidence too).
-    reacquire_window_s: float = 60.0
-    max_speed: float = 30.0  # m/s
+    # A lost track keeps dead reckoning. Acquisition then searches only its 3-sigma region,
+    # and while that region is small a candidate in it is confirmed with fewer matches
+    # (continuity is evidence too). Beyond max_dead_reckoning_m the whole region is searched.
+    reacquire_radius_m: float = 1000.0
     reacquire_confirm_frames: int = 3  # matches including the acquisition (vs confirm_frames)
+    max_dead_reckoning_m: float = 2000.0
+    max_speed: float = 30.0  # m/s; faster odometry is a wrong fit
     # Confirmation
     confirm_frames: int = 4
     confirm_distance_m: float = 120.0  # ground covered before a candidate can win
@@ -120,7 +125,7 @@ class _Hypothesis:
     travelled: float = 0.0  # distance between matched positions, not dead reckoning
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
-    near_lost_track: bool = False  # found where a just-lost track could have flown to
+    near_track: bool = False  # found where a lost track's dead reckoning puts the aircraft
     streak: int = 0  # consecutive matches
     flown: float = 0.0  # dead-reckoned distance, metres
     streak_from: float = 0.0  # ``flown`` at the first match of the streak
@@ -160,10 +165,10 @@ class Localizer:
         self._odometry_nis = 2.0  # running normalized innovation; 2 when the model fits
         self.compass_offset = 0.0  # running estimate of true heading - compass
         self._frames_in_state = 0
-        self._lost_track: tuple[float, np.ndarray] | None = None  # (time, xy) of its last match
         self._last_t: float | None = None
         self._last_yaw: float | None = None
         self.window: PoseWindow | None = None
+        self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
         self._window_start = 0.0
         # Every frame, for the whole-flight solve: telemetry, odometry, the match used, estimate.
@@ -186,6 +191,8 @@ class Localizer:
         self.log.append({"t": frame.t, "tel": frame.telemetry, "motion": self._motion, "fix": None})
         for h in self.hypotheses:
             h.frames.append(len(self.log) - 1)
+        if self.dead_reckoning is not None:
+            self._dead_reckon(frame)
         if self.status is Status.TRACKING:
             fix = self._track(frame, matchable)
         elif self.status is Status.LOST:
@@ -219,20 +226,30 @@ class Localizer:
     # -- acquisition and confirmation -------------------------------------
 
     def _acquire(self, frame: Frame) -> None:
-        cfg = self.cfg
+        cfg, dr = self.cfg, self.dead_reckoning
         yaw = frame.telemetry.yaw
-        center, radius = cfg.prior_center, cfg.prior_radius_m
-        reach = self._reach(frame.t)
-        if reach is not None:
-            center, radius = tuple(self._lost_track[1]), reach
-            # stay on the coarse (global) search path; it is restricted to this region
-            radius = max(radius, cfg.matcher.global_radius_m + 1.0)
         region = SearchRegion(
-            center=center,
-            radius=radius,
+            center=cfg.prior_center,
+            radius=cfg.prior_radius_m,
             heading=None if yaw is None else float(wrap_angle(yaw + self.compass_offset)),
             heading_span=np.radians(cfg.compass_prior_deg),
         )
+        if dr is not None:
+            x, y, heading = dr.pose
+            reach = cfg.search_sigmas * dr.sigma()
+            region = SearchRegion(
+                center=(float(x), float(y)),
+                # stay on the coarse (global) search path; it is restricted to this region
+                radius=max(reach, cfg.matcher.global_radius_m + 1.0),
+                heading=float(heading),
+                heading_span=float(
+                    np.clip(
+                        cfg.search_sigmas * dr.heading_sigma(),
+                        np.radians(cfg.max_heading_span_deg),
+                        np.pi,
+                    )
+                ),
+            )
         for f in self._match(frame, region):
             same = [h for h in self.hypotheses if self._same_place(h, f)]
             for h in same:
@@ -250,8 +267,8 @@ class Localizer:
             kf.P[:2, :2] += _spread(f)
             hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
             hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
-            if reach is not None:
-                hyp.near_lost_track = bool(np.hypot(*(hyp.xy - self._lost_track[1])) <= reach)
+            if dr is not None and reach <= cfg.reacquire_radius_m:
+                hyp.near_track = bool(np.hypot(*(hyp.xy - region.center)) <= reach)
             self.hypotheses.append(hyp)
         if self.hypotheses and self.status is Status.LOST:
             self.status = Status.CONVERGING
@@ -269,7 +286,7 @@ class Localizer:
             return
         best = max(self.hypotheses, key=lambda h: h.mean_score)
         hits = sum(s > 0 for s in best.scores)
-        if best.near_lost_track:
+        if best.near_track:
             needed, distance = cfg.reacquire_confirm_frames, 0.0
         else:
             needed, distance = cfg.confirm_frames, cfg.confirm_distance_m
@@ -289,7 +306,7 @@ class Localizer:
         self._start_window(best)
         self.hypotheses = []
         self.status = Status.TRACKING
-        self._lost_track = None
+        self.dead_reckoning = None
 
     # -- per-hypothesis tracking ------------------------------------------
 
@@ -440,13 +457,18 @@ class Localizer:
         return fix
 
     def _lose(self) -> None:
-        w = self.window
-        inliers = [nd for nd in w.nodes if nd.fix is not None and nd.inlier]
-        if inliers:
-            self._lost_track = (inliers[-1].t, inliers[-1].pose[:2].copy())
-        self.window = None
+        """Stop matching around the track, but keep dead reckoning it."""
+        self.dead_reckoning, self.window = self.window, None
         self.status = Status.LOST
         self._frames_in_state = 0
+
+    def _dead_reckon(self, frame: Frame) -> None:
+        w = self.dead_reckoning
+        w.extend(frame.t, frame.telemetry, self._motion)
+        w.solve()
+        w.trim()
+        if self.cfg.search_sigmas * w.sigma() > self.cfg.max_dead_reckoning_m:
+            self.dead_reckoning = None
 
     def smooth(self) -> list[Estimate]:
         """Whole-flight solve over every frame since the first confirmed track (recorded footage).
@@ -524,23 +546,6 @@ class Localizer:
         dt = t - self._last_t
         return m if np.hypot(*m.d_body) <= self.cfg.max_speed * dt else None
 
-    def _reach(self, t: float) -> float | None:
-        """How far the aircraft can be from the last match of a recently lost track."""
-        if self._lost_track is None:
-            return None
-        elapsed = t - self._lost_track[0]
-        if elapsed > self.cfg.reacquire_window_s:
-            self._lost_track = None
-            return None
-        return self.cfg.max_speed * elapsed + 50.0
-
-    def _searchable(self, h: _Hypothesis, t: float) -> bool:
-        """A confirmed track lives while its predicted position can still be searched for."""
-        cfg = self.cfg
-        within = cfg.search_sigmas * h.filter.pos_sigma <= cfg.max_search_m
-        recent = t - (h.last_hit_t if h.trusted else h.untrusted_since) <= cfg.max_coast_s
-        return within and recent
-
     def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
         try:
             return self.matcher.match(frame, region, self.scale)
@@ -579,6 +584,12 @@ class Localizer:
             x, y, heading = w.pose
             status = Status.TRACKING if trusted else Status.COASTING
             return Estimate(t, status, float(x), float(y), float(heading), sigma, fix, latency_ms)
+        if self.dead_reckoning is not None:
+            w = self.dead_reckoning
+            x, y, heading = w.pose
+            return Estimate(
+                t, Status.COASTING, float(x), float(y), float(heading), w.sigma(), fix, latency_ms
+            )
         if not self.hypotheses:
             return Estimate(t, Status.LOST, latency_ms=latency_ms)
         lead = max(self.hypotheses, key=lambda h: h.mean_score)

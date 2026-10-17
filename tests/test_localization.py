@@ -111,3 +111,29 @@ def test_whole_flight_solve_covers_at_least_the_live_track(small_sim):
     assert m_all["coverage_25m"] >= m_live["coverage_25m"]
     assert m_all["misleading"] == 0
     assert m_all["err_median_m"] < 6
+
+
+def test_lost_track_keeps_dead_reckoning_and_reacquires(small_sim):
+    """A blackout beyond the coast limit: the position stays reported with an honest
+    uncertainty, and a new track is confirmed soon after the frames come back."""
+    from pharos.nav.localizer import LocalizerConfig
+    from pharos.types import Frame
+
+    geomap, rec = small_sim
+    blank = range(24, 40)  # the track is confirmed at frame 20
+    frames = [
+        Frame(f.t, f.image * 0 + 110, f.telemetry) if i in blank else f
+        for i, f in enumerate(rec.frames)
+    ]
+    loc = Localizer(geomap, rec.camera, LocalizerConfig(max_coast_s=3.0))
+    estimates, reckoning = [], []
+    for f in frames:
+        estimates.append(loc.process(f))
+        reckoning.append(loc.dead_reckoning is not None)
+    assert any(reckoning[i] for i in blank)  # the track was lost...
+    for e, g in zip(estimates[24:40], rec.truth[24:40], strict=True):
+        assert e.status is not Status.LOST  # ...but never stopped reporting a position
+        assert np.hypot(e.x - g.x, e.y - g.y) <= 3 * e.sigma_xy
+    assert evaluate(estimates, rec.truth)["confident_wrong"] == 0
+    recovered = [i for i in range(40, len(estimates)) if estimates[i].status is Status.TRACKING]
+    assert recovered and recovered[0] <= 40 + 9

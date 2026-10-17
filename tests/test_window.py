@@ -144,3 +144,27 @@ def test_whole_flight_solve_bridges_turns_from_both_sides():
     assert np.percentile(err_all, 95) < 8
     sigmas = np.array([w.sigma(k) for k in range(len(w.nodes))])
     assert np.mean(err_all <= 3 * sigmas) > 0.95
+
+
+def test_dead_reckoning_stays_honest_without_matches():
+    """Minutes of odometry alone, with gaps: the drift is covered by the reported sigma.
+
+    Regression: information leaving the window was loosened once per dropped frame and
+    lost at a gap in odometry, and the motion prior pulled an unpinned scale to zero.
+    """
+    rng = np.random.default_rng(3)
+    track = racetrack(seconds=240)
+    obs = observations(track, rng)
+    obs = [
+        (t, tel, None if k % 15 == 0 else motion, fix if t < 20 else None)
+        for k, (t, tel, motion, fix) in enumerate(obs)
+    ]
+    w, est = run_live(track, obs)
+    err = np.array(
+        [np.hypot(p[0] - x, p[1] - y) for (p, _), (_, x, y, _, _) in zip(est, track, strict=True)]
+    )
+    sigma = np.array([s for _, s in est])
+    assert np.all(np.isfinite(sigma))
+    assert np.mean(err <= 3 * sigma) > 0.95
+    assert sigma[-1] < 1000  # grows with distance, but stays useful
+    assert 0.8 < w.scale < 1.3
