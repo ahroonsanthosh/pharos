@@ -51,6 +51,9 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("analyze", help="localize recorded footage and export the track")
     _footage_args(p)
+    p.add_argument(
+        "--causal", action="store_true", help="only what a live run would report (no smoothing)"
+    )
     p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("-o", "--out", type=Path, required=True)
     p.set_defaults(func=_analyze)
@@ -142,7 +145,7 @@ def _analyze(args) -> None:
         err = f"  error vs GNSS {rec['error_m']:.0f} m" if "error_m" in rec else ""
         print(f"\r{i}/{n} {rec['status']:<10}{err}      ", end="", flush=True)
 
-    records = analyze(footage, geomap, _config(args.config), progress)
+    records = analyze(footage, geomap, _config(args.config), progress, smooth=not args.causal)
     print()
     summary = write_outputs(records, geomap, args.out, args.footage.name)
     print(json.dumps(summary, indent=2))

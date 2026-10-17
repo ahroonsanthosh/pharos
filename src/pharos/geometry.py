@@ -78,10 +78,26 @@ def camera_attitude(r_ned: np.ndarray) -> tuple[float, float, float]:
     Exact for any attitude, so airframe and mount angles can be composed as
     rotations instead of added as angles.
     """
-    R = _NED_TO_ENU @ r_ned @ _FORWARD_CAMERA
+    return attitude_of(_NED_TO_ENU @ r_ned @ _FORWARD_CAMERA)
+
+
+def attitude_of(R: np.ndarray) -> tuple[float, float, float]:
+    """Yaw, pitch and roll of a camera rotation in world ENU: the inverse of
+    :func:`camera_rotation`."""
     yaw = np.arctan2(-R[0, 1], -R[1, 1])  # where image "up" points on the ground
     A = _NADIR.T @ rot_z(yaw) @ R  # = rot_x(pitch) @ rot_y(roll)
     return float(yaw), float(np.arctan2(A[2, 1], A[1, 1])), float(np.arctan2(A[0, 2], A[0, 0]))
+
+
+def misaligned(
+    yaw: float, pitch: float, roll: float, forward: float, right: float
+) -> tuple[float, float, float]:
+    """Attitude of a camera mounted ``forward``/``right`` (radians) off its reported attitude.
+
+    The misalignment turns with the camera, so in a banked turn it is not simply
+    added to pitch and roll.
+    """
+    return attitude_of(camera_rotation(yaw, pitch, roll) @ rot_x(forward) @ rot_y(right))
 
 
 @dataclass(frozen=True)

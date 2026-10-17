@@ -9,7 +9,9 @@ from pharos.geometry import (
     euler_ned,
     ground_to_image,
     image_to_ground_points,
+    misaligned,
     rot2,
+    rot_x,
     rot_y,
     wrap_angle,
 )
@@ -109,3 +111,14 @@ def test_camera_attitude_inverts_camera_rotation():
     for yaw, pitch, roll in angles:
         r_ned = ned_to_enu.T @ camera_rotation(yaw, pitch, roll) @ forward_camera.T
         np.testing.assert_allclose(camera_attitude(r_ned), (yaw, pitch, roll), atol=1e-9)
+
+
+def test_mount_misalignment_turns_with_the_camera():
+    d = np.radians
+    # level: a forward misalignment is just more pitch
+    np.testing.assert_allclose(misaligned(0.3, 0.0, 0.0, d(4), 0.0), (0.3, d(4), 0.0), atol=1e-9)
+    # banked 45 degrees: the same misalignment is not 4 degrees more pitch
+    yaw, pitch, roll = misaligned(0.0, 0.0, d(45), d(-4), 0.0)
+    assert abs(pitch - d(-4)) > d(1)
+    R = camera_rotation(0.0, 0.0, d(45)) @ rot_x(d(-4))
+    np.testing.assert_allclose(camera_rotation(yaw, pitch, roll), R, atol=1e-9)

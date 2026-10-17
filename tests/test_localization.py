@@ -99,3 +99,14 @@ def test_odometry_implying_impossible_speed_is_ignored(small_sim):
     jump = Motion(np.array([0.0, 37.0]), 0.0, 6.8, 0.01, 100, 1.0)  # 74 m/s
     assert loc._plausible(step, 10.5) is step
     assert loc._plausible(jump, 10.5) is None
+
+
+def test_whole_flight_solve_covers_at_least_the_live_track(small_sim):
+    geomap, rec = small_sim
+    loc = Localizer(geomap, rec.camera)
+    live = [loc.process(f) for f in rec.frames]
+    smoothed = loc.smooth()
+    m_live, m_all = evaluate(live, rec.truth), evaluate(smoothed, rec.truth)
+    assert m_all["coverage_25m"] >= m_live["coverage_25m"]
+    assert m_all["misleading"] == 0
+    assert m_all["err_median_m"] < 6

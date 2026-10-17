@@ -57,8 +57,10 @@ _COLUMNS = [
     ("err_median_m", "err50 m", "{:.1f}"),
     ("err_p95_m", "err95 m", "{:.1f}"),
     ("heading_err_median_deg", "hdg deg", "{:.1f}"),
-    ("recall_10m", "<10 m", "{:.0%}"),
-    ("confident_wrong", "wrong", "{:.1%}"),
+    ("coverage_25m", "cover", "{:.0%}"),
+    ("misleading", "mislead", "{:.1%}"),
+    ("longest_gap_s", "gap s", "{:.0f}"),
+    ("within_3_sigma", "in 3 sd", "{:.0%}"),
     ("latency_median_ms", "ms/frame", "{:.0f}"),
 ]
 

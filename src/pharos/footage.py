@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from pharos.geometry import Camera
+from pharos.geometry import Camera, misaligned
 from pharos.recording import Recording
 from pharos.telemetry import SrtTelemetry, TelemetrySample, TelemetrySource
 from pharos.types import Frame, Telemetry
@@ -298,7 +298,11 @@ def _offset(telemetry: list[Telemetry], mount_offset_deg: tuple[float, float]) -
     if not any(mount_offset_deg):
         return telemetry
     forward, right = np.radians(mount_offset_deg)
-    return [replace(t, pitch=t.pitch + forward, roll=t.roll + right) for t in telemetry]
+    out = []
+    for t in telemetry:
+        yaw, pitch, roll = misaligned(t.yaw or 0.0, t.pitch, t.roll, forward, right)
+        out.append(replace(t, yaw=None if t.yaw is None else yaw, pitch=pitch, roll=roll))
+    return out
 
 
 _XMP_FIELD = re.compile(rb'([\w-]+:\w+)="([+-]?[\d.]+)"')

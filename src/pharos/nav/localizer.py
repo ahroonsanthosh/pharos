@@ -1,4 +1,4 @@
-"""Frame-by-frame absolute localization: matcher + filters + a small state machine.
+"""Frame-by-frame absolute localization: matcher + estimators + a small state machine.
 
     LOST ──(global fixes)──▶ CONVERGING ──(one hypothesis wins)──▶ TRACKING
      ▲                          │                                    │
@@ -10,18 +10,25 @@ one frame fools the next few as well. Instead of trusting the best global fix,
 the localizer keeps several candidate locations, follows each one with local
 searches as the aircraft flies over new ground, and only commits when one
 candidate has clearly out-scored the others over a minimum distance.
+
+A confirmed track is a sliding window of recent frames (``nav.window``) solved
+jointly from odometry, heading and map matches, so a look-alike match is
+outvoted by the rest of the window. For recorded footage, ``smooth`` solves the
+whole flight at once, bridging gaps from both sides.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import pairwise
 
 import numpy as np
 
 from pharos.geomap import GeoMap
 from pharos.geometry import Camera, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
+from pharos.nav.window import PoseWindow, WindowConfig
 from pharos.types import Estimate, Fix, Frame, Status, Telemetry
 from pharos.vision.matcher import CorrelationMatcher, Matcher, MatcherConfig, SearchRegion
 from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
@@ -31,6 +38,7 @@ from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
 class LocalizerConfig:
     matcher: MatcherConfig = field(default_factory=MatcherConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
+    window: WindowConfig = field(default_factory=WindowConfig)
     odometry: OdometryConfig | None = field(default_factory=OdometryConfig)  # None: off
     # Frames from lower or with the camera tilted further from straight down are skipped:
     # on the ground, taking off, or looking at the horizon.
@@ -64,7 +72,10 @@ class LocalizerConfig:
     # A confirmed track keeps searching around its prediction (reported as coasting) while
     # the window that needs stays within max_search_m, for up to max_coast_s.
     max_coast_s: float = 30.0
-    trust_sigma_m: float = 15.0  # beyond this uncertainty a track is reported as coasting
+    trust_sigma_m: float = 10.0  # beyond this uncertainty a track is reported as coasting
+    # A position is trusted only with this many independent inlier matches in the window
+    # (matches closer than reconfirm_distance_m of flight count once).
+    trust_support: int = 2
     # Trusting a track again after coasting takes consecutive matches spread over this much
     # flown ground: overlapping frames see the same look-alike, so they are not independent.
     # Untrusted, a match must stand out more and counts less; a track that stays
@@ -110,6 +121,8 @@ class _Hypothesis:
     flown: float = 0.0  # dead-reckoned distance, metres
     streak_from: float = 0.0  # ``flown`` at the first match of the streak
     untrusted_since: float = 0.0  # time trust was lost
+    frames: list[int] = field(default_factory=list)  # log indices since acquisition
+    fixes: dict[int, Fix] = field(default_factory=dict)  # its matches, by log index
 
     @property
     def mean_score(self) -> float:
@@ -146,6 +159,11 @@ class Localizer:
         self._lost_track: tuple[float, np.ndarray] | None = None  # (time, xy) of its last match
         self._last_t: float | None = None
         self._last_yaw: float | None = None
+        self.window: PoseWindow | None = None
+        self.odometry_scale = 1.0  # learned by the window, carried to the next track
+        self._window_start = 0.0
+        # Every frame, for the whole-flight solve: telemetry, odometry, the match used, estimate.
+        self.log: list[dict] = []
 
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
@@ -161,39 +179,33 @@ class Localizer:
         if not matchable:
             for h in self.hypotheses:
                 h.streak = 0  # a frame not matched breaks a run of matches
-        if self.status is Status.LOST:
+        self.log.append({"t": frame.t, "tel": frame.telemetry, "motion": self._motion, "fix": None})
+        for h in self.hypotheses:
+            h.frames.append(len(self.log) - 1)
+        if self.status is Status.TRACKING:
+            fix = self._track(frame, matchable)
+        elif self.status is Status.LOST:
             # Consecutive frames overlap heavily, so searching every frame buys little.
             if matchable and self._frames_in_state % self.cfg.lost_search_every == 0:
                 self._acquire(frame)
             if self.status is Status.LOST:
                 self._frames_in_state += 1
-        else:
+        else:  # converging
             for h in self.hypotheses:
                 self._predict(h, frame)
-            if self.status is Status.TRACKING:
-                # Decide before searching: a wide search must not resurrect a lost track.
+            if matchable:
                 for h in self.hypotheses:
-                    if not self._searchable(h, frame.t) and h.last_hit_xy is not None:
-                        self._lost_track = (h.last_hit_t, h.last_hit_xy.copy())
-                self.hypotheses = [h for h in self.hypotheses if self._searchable(h, frame.t)]
-            fixes = [self._measure(h, frame) if matchable else None for h in self.hypotheses]
-            alive = [
-                (h, f)
-                for h, f in zip(self.hypotheses, fixes, strict=True)
-                if self.status is Status.TRACKING
-                or frame.t - h.last_hit_t <= self.cfg.max_coast_converging_s
+                    self._measure(h, frame)
+            self.hypotheses = [
+                h
+                for h in self.hypotheses
+                if frame.t - h.last_hit_t <= self.cfg.max_coast_converging_s
             ]
-            self.hypotheses = [h for h, _ in alive]
-            if self.status is Status.TRACKING and alive:
-                fix = alive[0][1]
-                if fix is not None and alive[0][0].trusted:
-                    self._learn(fix, frame)
-            elif self.status is Status.CONVERGING:
-                self._frames_in_state += 1
-                if matchable and self._frames_in_state % self.cfg.reacquire_every == 0:
-                    self._acquire(frame)
-                self._try_confirm()
-            if not self.hypotheses:
+            self._frames_in_state += 1
+            if matchable and self._frames_in_state % self.cfg.reacquire_every == 0:
+                self._acquire(frame)
+            self._try_confirm()
+            if self.status is Status.CONVERGING and not self.hypotheses:
                 self.status = Status.LOST
                 self._frames_in_state = 0
         self._last_t = frame.t
@@ -233,6 +245,7 @@ class Localizer:
             )
             kf.P[:2, :2] += _spread(f)
             hyp = _Hypothesis(kf, [f.score], frame.t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
+            hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
             if reach is not None:
                 hyp.near_lost_track = bool(np.hypot(*(hyp.xy - self._lost_track[1])) <= reach)
             self.hypotheses.append(hyp)
@@ -269,7 +282,8 @@ class Localizer:
             lead = np.mean(best.scores[-k:]) - np.mean(other.scores[-k:])
             if other is not best and lead < cfg.confirm_margin:
                 return
-        self.hypotheses = [best]
+        self._start_window(best)
+        self.hypotheses = []
         self.status = Status.TRACKING
         self._lost_track = None
 
@@ -331,6 +345,7 @@ class Localizer:
         if fix is None:
             h.streak = 0
             return None
+        h.fixes[len(self.log) - 1] = fix
         if h.streak == 0:
             h.streak_from = h.flown
         h.streak += 1
@@ -341,6 +356,150 @@ class Localizer:
             h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
         h.last_hit_t, h.last_hit_xy = frame.t, h.xy
         return fix
+
+    # -- confirmed track: sliding window ------------------------------------
+
+    def _start_window(self, h: _Hypothesis) -> None:
+        """Replay the winning hypothesis's frames and matches into a window."""
+        cfg = self.cfg
+        first = h.frames[0]
+        f0 = h.fixes[first]
+        pose = np.array([f0.x, f0.y, f0.heading])
+        cov = np.diag(
+            [cfg.meas_sigma_m**2, cfg.meas_sigma_m**2, np.radians(cfg.meas_heading_sigma_deg) ** 2]
+        )
+        cov[:2, :2] += _spread(f0)
+        log = self.log
+        w = PoseWindow(
+            cfg.window,
+            log[first]["t"],
+            log[first]["tel"],
+            pose,
+            cov,
+            self.compass_offset,
+            self.odometry_scale,
+        )
+        w.attach(f0)
+        log[first]["fix"] = f0
+        for i in h.frames[1:]:
+            w.extend(log[i]["t"], log[i]["tel"], log[i]["motion"])
+            if i in h.fixes:
+                w.attach(h.fixes[i])
+                log[i]["fix"] = h.fixes[i]
+        w.solve()
+        w.trim()
+        self.window = w
+        self._window_start = log[first]["t"]
+
+    def _track(self, frame: Frame, matchable: bool) -> Fix | None:
+        cfg, w = self.cfg, self.window
+        w.extend(frame.t, frame.telemetry, self._motion)
+        w.solve()
+        sigma = w.sigma()
+        last = w.last_inlier_t() or self._window_start
+        if cfg.search_sigmas * sigma > cfg.max_search_m or frame.t - last > cfg.max_coast_s:
+            self._lose()
+            return None
+        fix = None
+        if matchable:
+            x, y, heading = w.pose
+            region = SearchRegion(
+                center=(float(x), float(y)),
+                radius=float(
+                    np.clip(cfg.search_sigmas * sigma, cfg.min_search_m, cfg.max_search_m)
+                ),
+                heading=float(heading),
+                heading_span=float(
+                    np.clip(
+                        cfg.search_sigmas * w.heading_sigma(),
+                        np.radians(cfg.min_heading_span_deg),
+                        np.radians(cfg.max_heading_span_deg),
+                    )
+                ),
+            )
+            fixes = self._match(frame, region)
+            fix = fixes[0] if fixes else None
+            if fix is not None and (
+                fix.score < cfg.track_min_score or fix.excess < cfg.track_min_excess
+            ):
+                fix = None
+            if fix is not None:
+                w.attach(fix)
+                w.solve()
+                self.log[-1]["fix"] = fix
+                if w.nodes[-1].inlier:
+                    self._learn(fix, frame)
+                else:
+                    fix = None
+        w.trim()
+        self.compass_offset, self.odometry_scale = w.compass_offset, w.scale
+        return fix
+
+    def _lose(self) -> None:
+        w = self.window
+        inliers = [nd for nd in w.nodes if nd.fix is not None and nd.inlier]
+        if inliers:
+            self._lost_track = (inliers[-1].t, inliers[-1].pose[:2].copy())
+        self.window = None
+        self.status = Status.LOST
+        self._frames_in_state = 0
+
+    def smooth(self) -> list[Estimate]:
+        """Whole-flight solve over every frame since the first confirmed track (recorded footage).
+
+        Frames before the first confirmation keep their causal estimates. A frame is
+        trusted with a small smoothed uncertainty and enough independent inlier matches
+        within half a window span of it.
+        """
+        cfg, log = self.cfg, self.log
+        estimates = [e["estimate"] for e in log]
+        start = next((i for i, e in enumerate(log) if e["fix"] is not None), None)
+        if start is None:
+            return estimates
+        f0 = log[start]["fix"]
+        w = PoseWindow(
+            replace(cfg.window, span_s=float("inf")),
+            log[start]["t"],
+            log[start]["tel"],
+            np.array([f0.x, f0.y, f0.heading]),
+            np.diag([100.0, 100.0, 0.05]),
+            self.compass_offset,
+            self.odometry_scale,
+        )
+        w.attach(f0)
+        for e in log[start + 1 :]:
+            est = e["estimate"]
+            guess = None  # start from the causal estimate where there is one
+            if est.status is not Status.LOST and np.isfinite(est.x):
+                guess = np.array([est.x, est.y, est.heading])
+            w.extend(e["t"], e["tel"], e["motion"], guess)
+            if e["fix"] is not None:
+                w.attach(e["fix"])
+        w.solve(covariances="all")
+        steps = [np.hypot(*(b.pose[:2] - a.pose[:2])) for a, b in pairwise(w.nodes)]
+        flown = np.concatenate([[0.0], np.cumsum(steps)])
+        t = np.array([nd.t for nd in w.nodes])
+        inlier = np.array([nd.fix is not None and nd.inlier for nd in w.nodes])
+        half = cfg.window.span_s / 2
+        for k, nd in enumerate(w.nodes):
+            near = flown[inlier & (np.abs(t - nd.t) <= half)]
+            sigma = w.sigma(k)
+            trusted = (
+                sigma <= cfg.trust_sigma_m
+                and _independent(near, cfg.reconfirm_distance_m) >= cfg.trust_support
+            )
+            old = estimates[start + k]
+            estimates[start + k] = Estimate(
+                old.t,
+                Status.TRACKING if trusted else Status.COASTING,
+                float(nd.pose[0]),
+                float(nd.pose[1]),
+                float(nd.pose[2]),
+                sigma,
+                old.fix,
+                old.latency_ms,
+            )
+        return estimates
 
     # -- helpers ----------------------------------------------------------
 
@@ -393,6 +552,21 @@ class Localizer:
             self.compass_offset = float(wrap_angle(self.compass_offset + a * err))
 
     def _estimate(self, t: float, fix: Fix | None, latency_ms: float) -> Estimate:
+        estimate = self._current(t, fix, latency_ms)
+        self.log[-1]["estimate"] = estimate
+        return estimate
+
+    def _current(self, t: float, fix: Fix | None, latency_ms: float) -> Estimate:
+        if self.status is Status.TRACKING and self.window is not None:
+            w, cfg = self.window, self.cfg
+            sigma = w.sigma()
+            trusted = (
+                sigma <= cfg.trust_sigma_m
+                and w.support(cfg.reconfirm_distance_m) >= cfg.trust_support
+            )
+            x, y, heading = w.pose
+            status = Status.TRACKING if trusted else Status.COASTING
+            return Estimate(t, status, float(x), float(y), float(heading), sigma, fix, latency_ms)
         if not self.hypotheses:
             return Estimate(t, Status.LOST, latency_ms=latency_ms)
         lead = max(self.hypotheses, key=lambda h: h.mean_score)
@@ -417,3 +591,12 @@ class Localizer:
 def _spread(fix: Fix) -> np.ndarray:
     ee, en, nn = fix.spread
     return np.array([[ee, en], [en, nn]])
+
+
+def _independent(flown: np.ndarray, separation_m: float) -> int:
+    """Matches at these flown distances, counting those within ``separation_m`` of a run once."""
+    count, last = 0, -np.inf
+    for f in np.sort(flown):
+        if f - last >= separation_m:
+            count, last = count + 1, f
+    return count
