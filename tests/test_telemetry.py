@@ -81,8 +81,15 @@ def test_mavlink_state_gimbal_and_rangefinder():
     s.handle(Msg("GIMBAL_DEVICE_ATTITUDE_STATUS", q=[math.cos(half), 0, math.sin(half), 0]))
     assert math.isclose(math.degrees(s.sample("gimbal", 0.0).telemetry.pitch), 30.0, abs_tol=1e-6)
 
-    s.handle(Msg("DISTANCE_SENSOR", orientation=25, current_distance=14_200,
-                 min_distance=20, max_distance=40_000))  # fmt: skip
+    s.handle(
+        Msg(
+            "DISTANCE_SENSOR",
+            orientation=25,
+            current_distance=14_200,
+            min_distance=20,
+            max_distance=40_000,
+        )
+    )
     assert s.sample("gimbal", 0.0).telemetry.altitude == 142.0
 
 

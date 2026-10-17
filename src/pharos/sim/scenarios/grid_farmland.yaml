@@ -1,0 +1,16 @@
+# Survey-grid farmland (US sections, polders): square fields, straight roads
+# on a lattice, few landmarks. Many places look alike, some even when turned
+# around, so this tests that look-alikes are rejected rather than confirmed.
+name: grid_farmland
+seed: 11
+world:
+  layout: grid
+  parcel_spacing_m: 100
+  major_roads: 0
+  forest_fraction: 0.05
+  river: false
+  ponds: 1
+  villages: 2
+  buildings_per_village: 15
+changes: {replant: 0.5}
+flight_look: {seed: 9, sun_azimuth_deg: 120, sun_elevation_deg: 45}

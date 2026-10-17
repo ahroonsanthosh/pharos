@@ -16,7 +16,8 @@ _H = np.array([[1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 0, 0, 1]], float)
 class FilterConfig:
     accel_sigma: float = 2.0  # m/s^2, white-noise acceleration
     heading_rate_sigma_deg: float = 20.0  # deg/s, heading random walk without a compass
-    gyro_sigma_deg: float = 1.0  # deg/s, error on compass-derived heading changes
+    gyro_sigma_deg: float = 1.0  # deg/s, drift of compass-derived heading changes
+    compass_noise_deg: float = 1.0  # per-reading compass noise; a change carries two readings
     init_velocity_sigma: float = 15.0  # m/s
     gate: float = 16.3  # chi-square, 3 dof, p = 0.999
 
@@ -52,7 +53,8 @@ class PoseFilter:
         self.x = F @ self.x
         if heading_change is not None:
             self.x[4] += heading_change
-            q_h = (np.radians(self.cfg.gyro_sigma_deg) ** 2) * dt
+            q_h = np.radians(self.cfg.gyro_sigma_deg) ** 2 * dt
+            q_h += 2 * np.radians(self.cfg.compass_noise_deg) ** 2
         else:
             q_h = (np.radians(self.cfg.heading_rate_sigma_deg) ** 2) * dt
         self.x[4] = wrap_angle(self.x[4])

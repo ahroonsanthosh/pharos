@@ -44,6 +44,7 @@ N_ROOFS = 4
 
 @dataclass(frozen=True)
 class WorldSpec:
+    layout: str = "organic"  # "organic" (irregular parcels) or "grid" (survey grid, look-alikes)
     size_m: float = 1600.0
     gsd: float = 0.5
     parcel_spacing_m: float = 110.0
@@ -53,6 +54,7 @@ class WorldSpec:
     hedge_fraction: float = 0.3
     track_fraction: float = 0.25
     major_roads: int = 3
+    grid_road_every: int = 8  # grid layout: a straight road every N parcels
     minor_road_fraction: float = 0.15
     river: bool = True
     ponds: int = 3
@@ -101,7 +103,12 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
     n = round(spec.size_m * px)
     shape = (n, n)
 
-    parcel, facets = _parcels(shape, spec.parcel_spacing_m * px, rng)
+    if spec.layout == "grid":
+        parcel, facets = _grid_parcels(shape, spec.parcel_spacing_m * px, rng)
+    elif spec.layout == "organic":
+        parcel, facets = _parcels(shape, spec.parcel_spacing_m * px, rng)
+    else:
+        raise ValueError(f"unknown layout {spec.layout!r}")
     n_parcels = len(facets)
     kind = rng.choice(
         [Parcel.CROP, Parcel.MEADOW, Parcel.FOREST, Parcel.BARE],
@@ -135,6 +142,8 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
         cv2.ellipse(cover, c, axes, rng.uniform(0, 180), 0, 360, int(Cover.WATER), -1)
 
     major = [_major_road(n, rng) for _ in range(spec.major_roads)]
+    if spec.layout == "grid":
+        major += _grid_roads(n, spec.parcel_spacing_m * px * spec.grid_road_every)
     for line in major:
         cv2.polylines(cover, [line], False, int(Cover.ROAD), max(int(9 * px), 1))
     for facet in facets:
@@ -210,6 +219,38 @@ def apply_changes(world: World, spec: ChangeSpec, seed: int) -> World:
 def _normalize(p: list[float]) -> np.ndarray:
     a = np.clip(np.asarray(p, float), 0, None)
     return a / a.sum()
+
+
+def _grid_parcels(shape, spacing_px: float, rng) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Square survey-grid parcels, some split into strips: deliberately repetitive."""
+    h, w = shape
+    parcel = np.zeros(shape, np.int32)
+    polys = []
+    for y0 in np.arange(0, h, spacing_px):
+        for x0 in np.arange(0, w, spacing_px):
+            x1, y1 = x0 + spacing_px, y0 + spacing_px
+            xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+            cells = [(x0, y0, x1, y1)]
+            if rng.random() < 0.3:  # split into two strips
+                if rng.random() < 0.5:
+                    cells = [(x0, y0, xm, y1), (xm, y0, x1, y1)]
+                else:
+                    cells = [(x0, y0, x1, ym), (x0, ym, x1, y1)]
+            for a, b, c, d in cells:
+                poly = np.round([[a, b], [c, b], [c, d], [a, d]]).astype(np.int32)
+                cv2.fillPoly(parcel, [poly], len(polys))
+                polys.append(poly)
+    return parcel, polys
+
+
+def _grid_roads(n: int, every_px: float) -> list[np.ndarray]:
+    """Straight north-south and east-west roads on the survey grid."""
+    s = np.linspace(0, n - 1, 50)
+    lines = []
+    for p in np.arange(every_px, n, every_px):
+        lines.append(np.round(np.column_stack([np.full_like(s, p), s])).astype(np.int32))
+        lines.append(np.round(np.column_stack([s, np.full_like(s, p)])).astype(np.int32))
+    return lines
 
 
 def _parcels(shape, spacing_px: float, rng) -> tuple[np.ndarray, list[np.ndarray]]:

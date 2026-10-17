@@ -9,8 +9,9 @@ from pharos.types import GroundTruth
 from pharos.vision.features import orientation_field
 from pharos.vision.rectify import disk_mask, footprint, nadir_from_patch_center, rectify
 
-CLEAN = CameraSpec(blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0,
-                   jpeg_quality=100)  # fmt: skip
+CLEAN = CameraSpec(
+    blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0, jpeg_quality=100
+)
 
 
 def ground_map():
@@ -24,8 +25,9 @@ def test_rectified_patch_matches_map():
     ground = ground_map()
     cam = Camera.from_fov(640, 480, 70)
     pose = GroundTruth(0, 300.0, 300.0, 120.0, np.radians(37), np.radians(12), np.radians(-4))
-    frame = cv2.cvtColor(render_frame(ground, cam, pose, CLEAN, np.random.default_rng(0)),
-                         cv2.COLOR_BGR2GRAY)  # fmt: skip
+    frame = cv2.cvtColor(
+        render_frame(ground, cam, pose, CLEAN, np.random.default_rng(0)), cv2.COLOR_BGR2GRAY
+    )
     fp = footprint(cam, pose.altitude, pose.pitch, pose.roll)
     gsd, R = 1.0, 40
     patch = rectify(frame, cam, pose.altitude, pose.pitch, pose.roll, pose.heading, gsd, R, fp)
@@ -39,8 +41,7 @@ def test_rectified_patch_matches_map():
     a, b = orientation_field(patch, mask), orientation_field(ref, mask)
     cos = np.vdot(a, b).real / (np.linalg.norm(a) * np.linalg.norm(b))
     assert cos > 0.8
-    np.testing.assert_allclose(nadir_from_patch_center(center, pose.heading, fp),
-                               [pose.x, pose.y])  # fmt: skip
+    np.testing.assert_allclose(nadir_from_patch_center(center, pose.heading, fp), [pose.x, pose.y])
 
 
 def test_footprint_of_tilted_camera_moves_forward():

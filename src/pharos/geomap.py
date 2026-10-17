@@ -113,8 +113,9 @@ class GeoMap:
         blurred = cv2.GaussianBlur(self.image, (0, 0), 0.5 * f)
         image = cv2.warpAffine(blurred, M, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
         half = (f - 1) / 2 * self.gsd
-        return GeoMap(image, gsd, self.origin_x + half, self.origin_y - half, self.geo_origin,
-                      self.crs)  # fmt: skip
+        return GeoMap(
+            image, gsd, self.origin_x + half, self.origin_y - half, self.geo_origin, self.crs
+        )
 
     def save(self, path: str | Path) -> None:
         """Write ``<path>.png`` and a ``<path>.json`` georeference sidecar."""

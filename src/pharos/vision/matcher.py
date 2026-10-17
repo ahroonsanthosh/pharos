@@ -49,6 +49,7 @@ class MatcherConfig:
     scales: tuple[float, ...] = (0.94, 1.0, 1.06)  # altitude-correction hypotheses
     candidates: int = 5  # coarse candidates refined in a global search
     peak_separation_m: float = 40.0  # peaks closer than this are the same place
+    sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
     min_overlap: float = 0.75
 
 
@@ -115,13 +116,17 @@ class CorrelationMatcher:
         _, gsd = self._features(cfg.coarse_level)
         sep = max(int(cfg.peak_separation_m / gsd), 1)
         fixes = []
-        for r, c, s in find_peaks(res.best, cfg.candidates, sep):
+        for r, c, _ in find_peaks(res.best, cfg.candidates, sep):
             i = int(res.best_idx[r, c])
             heading = float(res.headings[i])
             x, y = self._to_world(res, r, c, heading, res.footprints[scale])
-            local = SearchRegion((x, y), 3 * gsd + 4.0, heading, step)
-            fix = self._local(gray, frame, local, scale)
-            fixes.append(fix if fix is not None else Fix(x, y, heading, s, 0.0, scale))
+            # Line-dominated scenes can match almost as well turned around, so the
+            # opposite heading is refined too and competes as a separate candidate.
+            for h in (heading, heading + np.pi):
+                local = SearchRegion((x, y), 3 * gsd + 4.0, float(wrap_angle(h)), step)
+                fix = self._local(gray, frame, local, scale)
+                if fix is not None:
+                    fixes.append(fix)
         fixes.sort(key=lambda f: f.score, reverse=True)
         return _with_distinctiveness(fixes, cfg.peak_separation_m)
 
@@ -153,7 +158,7 @@ class CorrelationMatcher:
         x, y = self._to_world(res, rr, cc, heading, fp)
 
         _, gsd = self._features(cfg.fine_level)
-        peaks = find_peaks(res.best, 2, max(int(cfg.peak_separation_m / gsd), 1))
+        peaks = find_peaks(res.best, 2, max(int(cfg.sidelobe_m / gsd), 2))
         s2 = peaks[1][2] if len(peaks) > 1 else 0.0
         return Fix(x, y, heading, s1, _distinct(s1, s2), scale_est)
 
@@ -267,11 +272,17 @@ def _distinct(s1: float, s2: float) -> float:
 
 
 def _with_distinctiveness(fixes: list[Fix], separation: float) -> list[Fix]:
-    """Set each fix's distinctiveness against the best spatially distinct rival."""
+    """Set each fix's distinctiveness against its best rival: elsewhere, or turned around."""
     out = []
     for f in fixes:
         rivals = [
-            g.score for g in fixes if g is not f and np.hypot(g.x - f.x, g.y - f.y) >= separation
+            g.score
+            for g in fixes
+            if g is not f
+            and (
+                np.hypot(g.x - f.x, g.y - f.y) >= separation
+                or abs(wrap_angle(g.heading - f.heading)) >= np.pi / 2
+            )
         ]
         d = _distinct(f.score, max(rivals, default=0.0))
         out.append(Fix(f.x, f.y, f.heading, f.score, d, f.scale))

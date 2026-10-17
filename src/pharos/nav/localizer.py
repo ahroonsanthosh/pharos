@@ -35,6 +35,7 @@ class LocalizerConfig:
     prior_radius_m: float = float("inf")
     compass_prior_deg: float = 45.0  # heading search half-width around the compass when lost
     init_min_score: float = 0.25
+    init_min_distinctiveness: float = 0.1  # a winner must once have stood out map-wide
     max_hypotheses: int = 4
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
@@ -51,7 +52,7 @@ class LocalizerConfig:
     search_sigmas: float = 3.0
     min_search_m: float = 15.0
     max_search_m: float = 150.0
-    min_heading_span_deg: float = 4.0
+    min_heading_span_deg: float = 6.0  # at least three fine heading steps
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
 
@@ -62,6 +63,7 @@ class _Hypothesis:
     scores: list[float] = field(default_factory=list)
     misses: int = 0
     travelled: float = 0.0
+    distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
 
     @property
     def mean_score(self) -> float:
@@ -138,13 +140,11 @@ class Localizer:
             heading=None if yaw is None else float(wrap_angle(yaw + self.compass_offset)),
             heading_span=np.radians(cfg.compass_prior_deg),
         )
-        sep = cfg.matcher.peak_separation_m
         for f in self._match(frame, region):
-            if len(self.hypotheses) >= cfg.max_hypotheses:
-                break
-            if f.score < cfg.init_min_score:
-                continue
-            if any(np.hypot(*(h.xy - (f.x, f.y))) < sep for h in self.hypotheses):
+            same = [h for h in self.hypotheses if self._same_place(h, f)]
+            for h in same:
+                h.distinct = max(h.distinct, f.distinctiveness)
+            if same or f.score < cfg.init_min_score or len(self.hypotheses) >= cfg.max_hypotheses:
                 continue
             kf = PoseFilter(
                 cfg.filter,
@@ -154,25 +154,37 @@ class Localizer:
                 pos_sigma=cfg.meas_sigma_m,
                 heading_sigma=np.radians(cfg.meas_heading_sigma_deg),
             )
-            self.hypotheses.append(_Hypothesis(kf, [f.score]))
+            self.hypotheses.append(_Hypothesis(kf, [f.score], distinct=f.distinctiveness))
         if self.hypotheses and self.status is Status.LOST:
             self.status = Status.CONVERGING
             self._frames_in_state = 0
 
+    def _same_place(self, h: _Hypothesis, f: Fix) -> bool:
+        """Same position and heading; a heading flipped by ~180 degrees is a rival."""
+        near = np.hypot(*(h.xy - (f.x, f.y))) < self.cfg.matcher.peak_separation_m
+        return near and abs(wrap_angle(h.filter.x[4] - f.heading)) < np.pi / 2
+
     def _try_confirm(self) -> None:
+        """Commit to the best hypothesis once it has clearly beaten every rival."""
         cfg = self.cfg
-        ranked = sorted(self.hypotheses, key=lambda h: h.mean_score, reverse=True)
-        if not ranked:
+        if not self.hypotheses:
             return
-        best = ranked[0]
-        runner_up = ranked[1].mean_score if len(ranked) > 1 else 0.0
+        best = max(self.hypotheses, key=lambda h: h.mean_score)
         if (
-            len(best.scores) >= cfg.confirm_frames
-            and best.travelled >= cfg.confirm_distance_m
-            and best.mean_score - runner_up >= cfg.confirm_margin
+            len(best.scores) < cfg.confirm_frames
+            or best.travelled < cfg.confirm_distance_m
+            or best.mean_score < cfg.init_min_score
+            or best.distinct < cfg.init_min_distinctiveness
         ):
-            self.hypotheses = [best]
-            self.status = Status.TRACKING
+            return
+        for other in self.hypotheses:
+            # Compare over the frames both have seen, not over unequal histories.
+            k = min(len(best.scores), len(other.scores))
+            lead = np.mean(best.scores[-k:]) - np.mean(other.scores[-k:])
+            if other is not best and lead < cfg.confirm_margin:
+                return
+        self.hypotheses = [best]
+        self.status = Status.TRACKING
 
     # -- per-hypothesis tracking ------------------------------------------
 

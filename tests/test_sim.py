@@ -41,3 +41,40 @@ def test_trajectory_spacing_and_bounds():
     assert len(traj) == 80
     np.testing.assert_allclose(np.linalg.norm(np.diff(xy, axis=0), axis=1), 5.0, rtol=0.05)
     assert xy.min() >= 100 - 1 and xy.max() <= 700 + 1
+
+
+def test_grid_layout_is_rectilinear():
+    spec = WorldSpec(
+        size_m=400,
+        layout="grid",
+        parcel_spacing_m=100,
+        major_roads=0,
+        grid_road_every=2,
+        villages=0,
+        river=False,
+        ponds=0,
+    )
+    w = generate_world(spec, 1)
+    assert len(w.parcel_kind) >= 16
+    assert np.sum(w.cover == Cover.ROAD) > 0  # lattice roads
+    with pytest.raises(ValueError, match="layout"):
+        generate_world(WorldSpec(size_m=200, layout="hexagons"), 1)
+
+
+def test_sensor_errors_are_applied():
+    from pharos.sim.flight import _SensorModel
+    from pharos.sim.scenario import TelemetrySpec
+    from pharos.types import GroundTruth
+
+    truth = [GroundTruth(t * 0.5, 0.0, 0.0, 100.0 + t, 0.0) for t in range(10)]
+    spec = TelemetrySpec(
+        altitude_bias=0,
+        altitude_noise_m=0,
+        attitude_noise_deg=0,
+        attitude_bias_deg=2.0,
+        latency_s=1.0,
+        altitude_offset_m=10,
+    )
+    tel = _SensorModel(spec, np.random.default_rng(0), truth).read(5)
+    assert np.isclose(np.hypot(tel.pitch, tel.roll), np.radians(2.0))
+    assert abs(tel.altitude - 103.0) == 10.0  # sampled 1 s (two frames) early, then offset

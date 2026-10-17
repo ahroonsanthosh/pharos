@@ -29,9 +29,10 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     camera = Camera.from_fov(sc.camera.width, sc.camera.height, sc.camera.hfov_deg)
     truth = generate_trajectory(sc.trajectory, geomap.extent, sc.seed + 2)
     rng = np.random.default_rng(sc.seed + 3)
-    sensors = _SensorModel(sc.telemetry, rng)
+    sensors = _SensorModel(sc.telemetry, rng, truth)
     frames = [
-        Frame(g.t, render_frame(ground, camera, g, sc.camera, rng), sensors.read(g)) for g in truth
+        Frame(g.t, render_frame(ground, camera, g, sc.camera, rng), sensors.read(i))
+        for i, g in enumerate(truth)
     ]
     return geomap, Recording(camera, frames, truth)
 
@@ -69,27 +70,37 @@ def render_frame(
 class _SensorModel:
     """Turns true poses into the biased, noisy telemetry an aircraft would report."""
 
-    def __init__(self, spec: TelemetrySpec, rng: np.random.Generator):
+    def __init__(self, spec: TelemetrySpec, rng: np.random.Generator, truth: list[GroundTruth]):
         self.spec = spec
         self.rng = rng
+        self.truth = truth
         self.compass_bias = np.radians(spec.compass_bias_deg) * rng.choice([-1, 1])
         self.drift_rate = np.radians(spec.compass_drift_deg_per_min) / 60 * rng.choice([-1, 1])
         self.alt_bias = 1.0 + spec.altitude_bias * rng.choice([-1, 1])
+        self.alt_offset = spec.altitude_offset_m * rng.choice([-1, 1])
+        direction = rng.uniform(0, 2 * np.pi)
+        bias = np.radians(spec.attitude_bias_deg)
+        self.mount = (bias * np.cos(direction), bias * np.sin(direction))  # pitch, roll
 
-    def read(self, g: GroundTruth) -> Telemetry:
+    def read(self, i: int) -> Telemetry:
+        """What the aircraft reports alongside frame ``i``."""
         s, rng = self.spec, self.rng
+        t = self.truth[i].t
+        g = min(self.truth, key=lambda q: abs(q.t - (t - s.latency_s)))
         att = np.radians(s.attitude_noise_deg)
         yaw = None
         if s.compass:
-            err = self.compass_bias + self.drift_rate * g.t
+            err = self.compass_bias + self.drift_rate * t
             yaw = float(
                 wrap_angle(g.heading + err + rng.normal(0, np.radians(s.compass_noise_deg)))
             )
         return Telemetry(
-            altitude=float(g.altitude * self.alt_bias + rng.normal(0, s.altitude_noise_m)),
+            altitude=float(
+                g.altitude * self.alt_bias + self.alt_offset + rng.normal(0, s.altitude_noise_m)
+            ),
             yaw=yaw,
-            pitch=float(g.pitch + rng.normal(0, att)),
-            roll=float(g.roll + rng.normal(0, att)),
+            pitch=float(g.pitch + self.mount[0] + rng.normal(0, att)),
+            roll=float(g.roll + self.mount[1] + rng.normal(0, att)),
         )
 
 

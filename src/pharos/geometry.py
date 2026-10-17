@@ -45,7 +45,7 @@ def rot_z(a: float) -> np.ndarray:
 
 
 def rot2(heading: float) -> np.ndarray:
-    """2D rotation taking a heading-up (forward, right) frame into (east, north).
+    """2D rotation taking heading-up (right, forward) coordinates into (east, north).
 
     A vector expressed as (right, forward) in the drone's frame maps to world
     (east, north) via ``rot2(heading) @ v``.

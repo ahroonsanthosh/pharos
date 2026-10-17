@@ -34,7 +34,10 @@ class TelemetrySpec:
     compass_noise_deg: float = 1.0
     altitude_bias: float = 0.04  # fraction of true height (baro vs terrain)
     altitude_noise_m: float = 1.0
+    altitude_offset_m: float = 0.0  # additive baro error (terrain height change since takeoff)
     attitude_noise_deg: float = 0.5
+    attitude_bias_deg: float = 0.0  # constant camera mount misalignment, random direction
+    latency_s: float = 0.0  # telemetry describes the aircraft this long before the frame
 
 
 @dataclass(frozen=True)
