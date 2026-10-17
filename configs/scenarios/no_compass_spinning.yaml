@@ -1,0 +1,6 @@
+# No compass at all and the aircraft yaws continuously: heading must come
+# entirely from the imagery.
+name: no_compass_spinning
+seed: 6
+telemetry: {compass: false}
+trajectory: {yaw_mode: spin, spin_rate_deg_s: 8}

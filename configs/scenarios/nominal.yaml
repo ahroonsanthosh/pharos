@@ -1,0 +1,4 @@
+# Summer flight over a map imaged in an earlier summer. Compass and baro are
+# mildly biased. Baseline every other scenario is compared against.
+name: nominal
+seed: 1

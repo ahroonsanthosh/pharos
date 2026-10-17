@@ -1,0 +1,6 @@
+# Years between map and flight: most fields replanted, new houses, some
+# buildings demolished, forest felled.
+name: land_change
+seed: 9
+changes: {replant: 0.8, buildings_removed: 0.3, buildings_added: 40, forest_cleared: 0.25}
+flight_look: {seed: 7, sun_azimuth_deg: 110, sun_elevation_deg: 45}

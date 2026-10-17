@@ -1,0 +1,4 @@
+# Forward-looking camera tilted 25 degrees off nadir, lower altitude.
+name: tilted_camera
+seed: 7
+trajectory: {tilt_deg: 25, altitude: 150}

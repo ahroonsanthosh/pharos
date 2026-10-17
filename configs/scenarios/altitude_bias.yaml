@@ -1,0 +1,6 @@
+# Barometric height 12% off (terrain change since takeoff) plus climbs and
+# descents: ground scale must be estimated from the imagery.
+name: altitude_bias
+seed: 8
+telemetry: {altitude_bias: 0.12}
+trajectory: {altitude_variation: 30}
