@@ -88,8 +88,10 @@ class LocalizerConfig:
     max_coast_s: float = 30.0
     # An untrusted track that rejects this many matches within contradiction_window_s, all
     # pointing to one place, gives up its belief: it dead-reckons, and the place has to win
-    # confirmation like any candidate. Counted as one, a run of matches cannot drag a wrong
-    # window over, so without this the track would wait out max_coast_s.
+    # full confirmation against its rivals (continuity is what is in doubt, so there is no
+    # fast reacquisition: a run on a look-alike looks just like this). Counted as one, a run
+    # of matches cannot drag a wrong window over, so without this the track would wait out
+    # max_coast_s.
     contradiction_matches: int = 3
     contradiction_window_s: float = 10.0
     trust_sigma_m: float = 10.0  # beyond this uncertainty a track is reported as coasting
@@ -464,8 +466,9 @@ class Localizer:
                     self._rejected = []
                 elif self._contradicted(frame.t, fix):
                     self._lose()
+                    self._lost_at = -np.inf  # no fast reacquisition near a contested track
                     # the match that tipped it starts the place's candidacy
-                    self._candidate(fix, frame.t, True)
+                    self._candidate(fix, frame.t, False)
                     return None
                 else:
                     fix = None

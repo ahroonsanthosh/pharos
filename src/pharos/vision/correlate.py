@@ -102,7 +102,7 @@ def peak_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
     area / correlation area, ``rho`` the correlation length in pixels). Unlike
     the raw score this does not depend on how much texture the scene has or on
     how large the window is, so the same threshold works in simulation and on
-    real imagery. Above ~1.5 a peak is unlikely to be noise.
+    real imagery. Above ~2 a peak is unlikely to be noise.
     """
     noise = _noise(score, r, c, rho)
     if noise is None:

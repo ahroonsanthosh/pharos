@@ -85,7 +85,8 @@ def frame_mask(fp: Footprint, heading: float, gsd: float, radius_px: int) -> np.
     mask = np.zeros((n, n), np.uint8)
     # a frame seen on a plane is convex, whatever order its border was sampled in
     cv2.fillConvexPoly(mask, np.round(cv2.convexHull(pts)).astype(np.int32), 1)
-    return cv2.erode(mask, np.ones((5, 5), np.uint8)).astype(bool) & disk_mask(radius_px)
+    disk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))  # same at every heading
+    return cv2.erode(mask, disk).astype(bool) & disk_mask(radius_px)
 
 
 def rectify(

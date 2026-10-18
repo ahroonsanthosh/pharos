@@ -192,8 +192,8 @@ class CorrelationMatcher:
         feat, gsd = self._features(level)
         fps = {s: footprint(self.camera, tel.altitude * s, tel.pitch, tel.roll) for s in scales}
         smallest = fps[min(scales)]  # inside every scale's coverage
-        frame = self.cfg.template == "frame"
-        reach = smallest.extent if frame else smallest.radius
+        whole = self.cfg.template == "frame"
+        reach = smallest.extent if whole else smallest.radius
         R = int(min(reach, self.cfg.max_radius_m) / gsd)
         if R < 8:
             return None
@@ -217,7 +217,7 @@ class CorrelationMatcher:
 
         # A heading only turns the patch about its centre, so features are computed once per
         # scale, heading-up, and turned for each heading hypothesis.
-        mask_up = frame_mask(smallest, 0.0, gsd, R) if frame else mask_t
+        mask_up = frame_mask(smallest, 0.0, gsd, R) if whole else mask_t
         upright = {
             s: orientation_field(
                 rectify(gray, self.camera, tel.altitude * s, tel.pitch, tel.roll, 0.0, gsd, R, fp),
@@ -233,7 +233,7 @@ class CorrelationMatcher:
         stack = np.empty((len(headings), len(scales), *best.shape), np.float32) if keep else None
         for hi, heading in enumerate(headings):
             mask_h, corr_h = mask_t, corr
-            if frame:  # the covered ground turns with the heading, and so does its mask
+            if whole:  # the covered ground turns with the heading, and so does its mask
                 mask_h = frame_mask(smallest, heading, gsd, R)
                 corr_h = corr.with_mask(mask_h)
             for si, s in enumerate(scales):
