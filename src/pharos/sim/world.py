@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from pharos.sim.procedural import catmull_rom, fbm
+from pharos.terrain import Terrain
 
 
 class Cover(IntEnum):
@@ -60,6 +61,14 @@ class WorldSpec:
     ponds: int = 3
     villages: int = 4
     buildings_per_village: int = 35
+
+
+@dataclass(frozen=True)
+class TerrainSpec:
+    """Hills under the world. Over hills, barometric heights are above the takeoff point."""
+
+    relief_m: float = 0.0  # highest minus lowest ground; 0 is flat
+    wavelength_m: float = 600.0  # typical distance from hilltop to hilltop
 
 
 @dataclass(frozen=True)
@@ -179,6 +188,19 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
         canopy=fbm(shape, rng, 8 * px, octaves=3),
         soil=fbm(shape, rng, 200 * px, octaves=5),
     )
+
+
+def generate_terrain(spec: TerrainSpec, size_m: float, seed: int) -> Terrain | None:
+    """Smooth random hills over the world's extent, or None for flat ground."""
+    if spec.relief_m <= 0:
+        return None
+    spacing = 10.0
+    n = int(np.ceil(size_m / spacing)) + 1
+    noise = np.random.default_rng(seed).standard_normal((n, n)).astype(np.float32)
+    sigma = spec.wavelength_m / 4 / spacing
+    z = cv2.GaussianBlur(noise, (0, 0), sigma, borderType=cv2.BORDER_REFLECT)
+    z = (z - z.min()) / (z.max() - z.min()) * spec.relief_m
+    return Terrain(z, spacing, 0.0, (n - 1) * spacing)
 
 
 def apply_changes(world: World, spec: ChangeSpec, seed: int) -> World:

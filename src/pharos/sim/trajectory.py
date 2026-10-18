@@ -17,7 +17,8 @@ class TrajectorySpec:
     duration_s: float = 60.0
     fps: float = 2.0  # localization rate; real video is subsampled to this
     speed: float = 12.0  # m/s
-    altitude: float = 180.0  # m above ground
+    altitude: float = 180.0  # m above ground; over hills, above the takeoff point...
+    follow_terrain: bool = False  # ...unless the aircraft keeps its height above ground
     altitude_variation: float = 10.0  # m, slow oscillation amplitude
     yaw_mode: str = "course"  # "course", "fixed", "spin"
     yaw_offset_deg: float = 0.0  # added to course (crabbing) or the fixed yaw

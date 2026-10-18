@@ -31,20 +31,23 @@ def analyze(
     come from one solve over the whole flight, so gaps are bridged from both sides.
     Each record then keeps what a live run would have reported under ``causal``.
     """
-    localizer = Localizer(geomap, footage.recording.camera, cfg)
-    records, telemetry = [], []
+    takeoff = geomap.from_latlon(*footage.takeoff) if footage.takeoff else None
+    localizer = Localizer(geomap, footage.recording.camera, cfg, takeoff=takeoff)
+    records, telemetry = [], []  # telemetry as reported and as used (height above ground)
     for i, (frame, gnss) in enumerate(zip(footage.recording, footage.gnss, strict=True)):
-        records.append(record(localizer.process(frame), frame.telemetry, gnss, geomap))
-        telemetry.append(frame.telemetry)
+        estimate = localizer.process(frame)
+        telemetry.append((frame.telemetry, localizer.log[-1]["tel"]))
+        reported, used = telemetry[-1]
+        records.append(record(estimate, reported, gnss, geomap, used))
         if progress:
             progress(i + 1, len(footage.gnss), records[-1])
     if not smooth:
         return records
     out = []
-    for causal, e, tel, gnss in zip(
+    for causal, e, (reported, used), gnss in zip(
         records, localizer.smooth(), telemetry, footage.gnss, strict=True
     ):
-        rec = record(e, tel, gnss, geomap)
+        rec = record(e, reported, gnss, geomap, used)
         keep = ("status", "x", "y", "sigma_m", "error_m")
         rec["causal"] = {k: causal[k] for k in keep if k in causal}
         out.append(rec)

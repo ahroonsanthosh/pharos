@@ -28,7 +28,7 @@ class RunResult:
 
 
 def localize(geomap: GeoMap, rec: Recording, cfg: LocalizerConfig | None = None) -> list[Estimate]:
-    loc = Localizer(geomap, rec.camera, cfg)
+    loc = Localizer(geomap, rec.camera, cfg, takeoff=rec.takeoff)
     return [loc.process(frame) for frame in rec]
 
 

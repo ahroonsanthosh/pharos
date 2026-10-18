@@ -38,6 +38,14 @@ pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry 
 pharos analyze cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5   # ArduPilot
 ```
 
+Barometric heights (DJI subtitles, MAVLink, an ArduPilot log's height above
+home) are measured from the takeoff point, not the ground below. Pharos
+downloads the free Copernicus 30 m terrain model for the map's area (once,
+then cached) and turns them into heights above the ground. It finds the
+takeoff point in telemetry that starts on the ground; otherwise give it with
+`--takeoff LAT LON`, or pharos learns it from its first confirmed position.
+`--dem` uses another elevation model and `--no-terrain` none.
+
 A separate camera and an autopilot log share no clock; `pharos sync` finds
 the offset from the footage alone. On a flight with GNSS, `pharos probe`
 measures per-frame match quality and calibrates the camera once (mount
@@ -72,7 +80,8 @@ pharos serve --open                        # dashboard without Docker
 ## How it works
 
 1. **Rectify.** Each frame is warped onto the ground plane at map
-   resolution using the reported altitude and camera tilt.
+   resolution using its height above the ground (barometric heights are
+   corrected with a terrain model) and camera tilt.
 2. **Describe.** Frame and map become dense orientation fields that keep
    edges (roads, field boundaries, buildings, shorelines) and discard
    intensity, contrast polarity, canopy texture and sun-driven shading.
@@ -202,8 +211,7 @@ how to fly and record for pharos.
 consumer camera (Sony IMX477, 1280×720 at 60 fps) on a pitch/yaw servo mount,
 each with its ArduPilot `.bin` log; the camera and autopilot share no clock.
 The map is Spain's PNOA orthophoto (IGN, CC BY 4.0, July 2024) over its free
-WMS. No openly licensed downward-looking DJI video with its `.SRT` could be
-found. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
+WMS. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
 22 s apart, matched against USGS NAIP 2015 (`--map-accuracy 6`: NAIP is good
 to about 6 m).
 
@@ -273,10 +281,9 @@ to about 6 m).
   still stands out in only 62% of frames. Stitching consecutive frames into a
   longer template, or learned features behind the `Matcher` protocol, are the
   next levers.
-* **Terrain in banks.** On flight 2 the ground a banked camera sees is 25 m
-  (rms) from the height under the aircraft; a free DEM (Copernicus GLO-30)
-  would correct odometry there. Near nadir it is only 2 to 4 m, so it is not
-  why flight 2 fails to acquire.
+* **Terrain within a frame.** Heights now follow the terrain, but each frame
+  is still rectified as a plane; a banked camera seeing across flight 2's
+  valley would gain from rectifying onto the elevation model itself.
 * **Lens distortion:** consumer cameras need undistorting; it matters most at
   the image edges a banked view relies on.
 * **More real flights:** a DJI MP4 + SRT gives ground truth for free.
@@ -285,7 +292,7 @@ to about 6 m).
 
 ```
 src/pharos/
-  geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
+  geometry.py  geomap.py  terrain.py  types.py  recording.py  config.py  cli.py
   footage.py  analyze.py  telemetry.py  sync.py
   vision/   rectify, features, correlate, matcher, odometry
   nav/      filter, window, localizer

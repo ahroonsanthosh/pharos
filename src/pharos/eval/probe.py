@@ -11,6 +11,9 @@ The confident true-window matches also calibrate the camera. Searched again
 over a wide range of scales, their offset from GNSS, seen from the camera, is
 the mount misalignment (plus any constant video delay), and their scale is the
 error of height times lens field of view.
+
+Heights above takeoff are taken as above the ground, unless the map has
+terrain and the footage shows where the aircraft took off.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from pharos.footage import Footage
 from pharos.geomap import GeoMap
 from pharos.geometry import rot2
 from pharos.nav.localizer import LocalizerConfig, matchable_view
-from pharos.vision.matcher import CorrelationMatcher, SearchRegion
+from pharos.vision.matcher import CorrelationMatcher, SearchRegion, view_height
 
 THRESHOLDS = (1.0, 1.5, 2.0)
 
@@ -56,6 +59,9 @@ def probe(
     camera = footage.recording.camera
     m = CorrelationMatcher(geomap, camera, config.matcher)
     wide = CorrelationMatcher(geomap, camera, replace(config.matcher, scales=cfg.calibrate_scales))
+    terrain, takeoff = geomap.terrain, None
+    if terrain is not None and footage.takeoff is not None:
+        takeoff = float(terrain.at(np.array(geomap.from_latlon(*footage.takeoff))))
     rows = []
     n = -(-len(footage.recording) // every)
     frames = itertools.islice(zip(footage.recording, footage.gnss, strict=True), 0, None, every)
@@ -64,12 +70,17 @@ def probe(
             continue
         if not matchable_view(frame.telemetry, config):
             continue
-        yaw = frame.telemetry.yaw
+        tel = frame.telemetry
+        yaw, height, altitude = tel.yaw, None, tel.altitude
+        if takeoff is not None and tel.above_takeoff:
+            height = terrain.height_above(takeoff + tel.altitude)
+            altitude = view_height(height, camera, tel, xy, yaw)
         span = math.radians(cfg.heading_span_deg) if yaw is not None else math.pi
         jitter = rng.uniform(-cfg.jitter_m, cfg.jitter_m, 2)
-        true = _best(m, frame, (xy[0] + jitter[0], xy[1] + jitter[1]), cfg.radius_m, yaw, span)
+        center = (xy[0] + jitter[0], xy[1] + jitter[1])
+        true = _best(m, frame, center, cfg.radius_m, yaw, span, height)
         decoy_xy = _decoy(geomap, xy, cfg, rng)
-        decoy = _best(m, frame, decoy_xy, cfg.radius_m, yaw, span) if decoy_xy else None
+        decoy = _best(m, frame, decoy_xy, cfg.radius_m, yaw, span, height) if decoy_xy else None
         row = {
             "t": frame.t,
             "true_excess": true.excess if true else None,
@@ -77,10 +88,10 @@ def probe(
             "true_error_m": math.hypot(true.x - xy[0], true.y - xy[1]) if true else None,
             "decoy_excess": decoy.excess if decoy else None,
             "decoy_score": decoy.score if decoy else None,
-            "altitude_m": frame.telemetry.altitude,
+            "altitude_m": altitude,
         }
         if true and true.excess >= cfg.calibrate_excess and row["true_error_m"] <= cfg.correct_m:
-            fine = _best(wide, frame, (true.x, true.y), 10.0, true.heading, math.radians(4))
+            fine = _best(wide, frame, (true.x, true.y), 10.0, true.heading, math.radians(4), height)
             if fine:
                 # (right, forward) from the GNSS position to the match, in the camera's frame
                 offset = rot2(fine.heading).T @ (fine.x - xy[0], fine.y - xy[1])
@@ -128,8 +139,8 @@ def summarize_probe(rows: list[dict], cfg: ProbeConfig | None = None) -> dict:
     return out
 
 
-def _best(m: CorrelationMatcher, frame, center, radius, yaw, span):
-    fixes = m.match(frame, SearchRegion(center, radius, yaw, span))
+def _best(m: CorrelationMatcher, frame, center, radius, yaw, span, height=None):
+    fixes = m.match(frame, SearchRegion(center, radius, yaw, span), height=height)
     return fixes[0] if fixes else None
 
 

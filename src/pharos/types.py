@@ -2,27 +2,36 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
+
+# The aircraft's height above the ground at world positions (..., 2), its own elevation
+# being what it is: the image scale over uneven ground. Not positive where it would be
+# underground.
+HeightField = Callable[[np.ndarray], np.ndarray]
 
 
 @dataclass(frozen=True)
 class Telemetry:
     """What the aircraft reports alongside a frame.
 
-    ``altitude`` is height above ground in metres (usually barometric, so it may
-    be biased). ``yaw`` is the compass heading if one is available; it may carry
-    a large bias, so the localizer only trusts its frame-to-frame changes and
-    uses its absolute value as a loose prior. ``pitch``/``roll`` are the camera
-    tilt from nadir (see :mod:`pharos.geometry`).
+    ``altitude`` is height above ground in metres, or with ``above_takeoff``
+    height above the takeoff point (barometric), which a terrain model turns
+    into height above ground (:mod:`pharos.terrain`). Either may be biased.
+    ``yaw`` is the compass heading if one is available; it may carry a large
+    bias, so the localizer only trusts its frame-to-frame changes and uses its
+    absolute value as a loose prior. ``pitch``/``roll`` are the camera tilt
+    from nadir (see :mod:`pharos.geometry`).
     """
 
     altitude: float
     yaw: float | None = None
     pitch: float = 0.0
     roll: float = 0.0
+    above_takeoff: bool = False
 
     @property
     def tilt(self) -> float:

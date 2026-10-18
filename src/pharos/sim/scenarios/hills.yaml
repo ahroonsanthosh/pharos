@@ -1,0 +1,8 @@
+# A DJI-style terrain-following survey over 150 m of relief: the aircraft
+# keeps about 120 m above the ground while its barometer, measuring from the
+# takeoff point, climbs to 180 m as the ground drops away. The terrain model
+# turns that back into height above the ground.
+name: hills
+seed: 14
+terrain: {relief_m: 150, wavelength_m: 700}
+trajectory: {altitude: 120, follow_terrain: true}

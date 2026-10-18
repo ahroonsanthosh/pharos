@@ -8,7 +8,7 @@ from pathlib import Path
 from pharos.config import load_yaml
 from pharos.sim.appearance import Look
 from pharos.sim.trajectory import TrajectorySpec
-from pharos.sim.world import ChangeSpec, WorldSpec
+from pharos.sim.world import ChangeSpec, TerrainSpec, WorldSpec
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,7 @@ class TelemetrySpec:
     attitude_noise_deg: float = 0.5
     attitude_bias_deg: float = 0.0  # constant camera mount misalignment, random direction
     latency_s: float = 0.0  # telemetry describes the aircraft this long before the frame
+    takeoff_known: bool = True  # over hills: the localizer is told where the aircraft took off
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class Scenario:
     map_gsd: float = 1.0  # metres per pixel of the reference map
     geo_origin: tuple[float, float] = (46.95, 7.45)  # lat, lon of world (0, 0)
     world: WorldSpec = field(default_factory=WorldSpec)
+    terrain: TerrainSpec = field(default_factory=TerrainSpec)
     changes: ChangeSpec = field(default_factory=ChangeSpec)
     map_look: Look = field(default_factory=Look)
     flight_look: Look = field(default_factory=lambda: Look(seed=1))

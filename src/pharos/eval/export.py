@@ -25,6 +25,7 @@ CSV_FIELDS = (
     "sigma_m",
     "score",
     "altitude_m",
+    "agl_m",
     "tilt_deg",
     "gnss_lat",
     "gnss_lon",
@@ -34,9 +35,18 @@ CSV_FIELDS = (
 
 
 def record(
-    e: Estimate, telemetry: Telemetry, gnss: tuple[float, float] | None, geomap: GeoMap
+    e: Estimate,
+    telemetry: Telemetry,
+    gnss: tuple[float, float] | None,
+    geomap: GeoMap,
+    used: Telemetry | None = None,
 ) -> dict:
-    """One frame's result. ``gnss`` is the aircraft's own position, if it reported one."""
+    """One frame's result. ``gnss`` is the aircraft's own position, if it reported one.
+
+    ``used`` is the telemetry as the localizer used it: with the height above the
+    ground (``agl_m``) worked out from the terrain where the aircraft reported its
+    height above takeoff.
+    """
     rec: dict = {
         "t": round(e.t, 3),
         "status": e.status.value,
@@ -44,6 +54,8 @@ def record(
         "tilt_deg": round(math.degrees(telemetry.pitch), 1),
         "latency_ms": round(e.latency_ms),
     }
+    if used is not None and telemetry.above_takeoff and not used.above_takeoff:
+        rec["agl_m"] = round(used.altitude, 1)
     if e.status is not Status.LOST:
         rec |= {
             "x": e.x,

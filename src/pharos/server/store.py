@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from pathlib import Path
@@ -9,6 +10,9 @@ from pathlib import Path
 import cv2
 
 from pharos.geomap import GeoMap
+from pharos.terrain import Terrain
+
+log = logging.getLogger(__name__)
 
 
 def safe_name(name: str) -> str:
@@ -31,6 +35,7 @@ class MapStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.match_gsd = match_gsd
         self._cache: dict[str, GeoMap] = {}
+        self._no_terrain: set[str] = set()  # maps for which fetching terrain failed
         self._lock = threading.Lock()
 
     def names(self) -> list[str]:
@@ -52,6 +57,24 @@ class MapStore:
         with self._lock:
             self._cache[name] = geomap
         return name
+
+    def with_terrain(self, name: str) -> GeoMap:
+        """The map with the terrain under it: Copernicus GLO-30, fetched once and kept.
+
+        Without network or ``pharos[geo]`` the map is returned as it is.
+        """
+        geomap = self.get(name)
+        if geomap.terrain is not None or name in self._no_terrain:
+            return geomap
+        try:
+            geomap.terrain = Terrain.copernicus(geomap, cache=self.root)
+        except (ImportError, OSError, ValueError):
+            log.exception("no terrain for map %s", name)
+            self._no_terrain.add(name)
+            return geomap
+        with self._lock:
+            geomap.save(self.root / safe_name(name))
+        return geomap
 
     def add_file(self, name: str, path: Path) -> str:
         """Import a GeoTIFF (``.tif``) or a PNG/JPEG with a ``.json`` sidecar next to it."""
@@ -76,6 +99,7 @@ class MapStore:
             "extent": [x0, y0, x1, y1],
             "size_km": [round((x1 - x0) / 1000, 2), round((y1 - y0) / 1000, 2)],
             "crs": gm.crs,
+            "terrain": gm.terrain is not None,
         }
 
     def preview(self, name: str, max_px: int = 2048) -> bytes:

@@ -18,6 +18,12 @@ dead reckoning: the position is still reported (as coasting) with an
 uncertainty that grows honestly, and the search for a new track is confined
 to where that uncertainty allows. For recorded footage, ``smooth`` solves the
 whole flight at once, bridging gaps from both sides.
+
+Over a map with terrain, barometric heights above the takeoff point become
+heights above the ground: at the current position for odometry, and wherever
+the aircraft might be for matching. That needs the takeoff's elevation: from
+the takeoff point when it is known, else from the first confirmed track, whose
+matches measure the height above the ground they saw.
 """
 
 from __future__ import annotations
@@ -29,12 +35,19 @@ from itertools import pairwise
 import numpy as np
 
 from pharos.geomap import GeoMap
-from pharos.geometry import Camera, wrap_angle
+from pharos.geometry import Camera, rot2, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
 from pharos.nav.window import PoseWindow, WindowConfig
-from pharos.types import Estimate, Fix, Frame, Status, Telemetry
-from pharos.vision.matcher import CorrelationMatcher, Matcher, MatcherConfig, SearchRegion
+from pharos.types import Estimate, Fix, Frame, HeightField, Status, Telemetry
+from pharos.vision.matcher import (
+    CorrelationMatcher,
+    Matcher,
+    MatcherConfig,
+    SearchRegion,
+    view_height,
+)
 from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
+from pharos.vision.rectify import footprint
 
 
 @dataclass(frozen=True)
@@ -158,10 +171,18 @@ class Localizer:
         camera: Camera,
         cfg: LocalizerConfig | None = None,
         matcher: Matcher | None = None,
+        takeoff: tuple[float, float] | None = None,
     ):
+        """``takeoff`` is where the aircraft took off (world coordinates), if known."""
         self.cfg = cfg or LocalizerConfig()
         self.map = geomap
+        self.camera = camera
         self.matcher = matcher or CorrelationMatcher(geomap, camera, self.cfg.matcher)
+        self.terrain = geomap.terrain
+        self.takeoff_elevation: float | None = None  # of the ground at takeoff, m
+        if takeoff is not None:
+            self.set_takeoff(takeoff)
+        self._height: HeightField | None = None  # this frame's height above ground anywhere
         odometry = self.cfg.odometry
         self.odometry = VisualOdometry(camera, odometry) if odometry is not None else None
         self._motion: Motion | None = None
@@ -182,8 +203,15 @@ class Localizer:
         # Every frame, for the whole-flight solve: telemetry, odometry, the match used, estimate.
         self.log: list[dict] = []
 
+    def set_takeoff(self, xy: tuple[float, float]) -> None:
+        """Where the aircraft took off (world coordinates): heights then follow the terrain."""
+        if self.terrain is not None and np.isfinite(elevation := self.terrain.at(xy)):
+            self.takeoff_elevation = float(elevation)
+
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
+        self._height = self._height_field(frame.telemetry)
+        frame = self._above_ground(frame)
         fix = None
         usable = usable_view(frame.telemetry, self.cfg)
         matchable = matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame)
@@ -324,9 +352,28 @@ class Localizer:
             if other is not best and lead < cfg.confirm_margin:
                 return
         self._start_window(best)
+        if self.takeoff_elevation is None and self.terrain is not None:
+            self._learn_takeoff(best)
         self.hypotheses = []
         self.status = Status.TRACKING
         self.dead_reckoning = None
+
+    def _learn_takeoff(self, h: _Hypothesis) -> None:
+        """The takeoff's elevation from a confirmed candidate's matches.
+
+        A match's scale is the height above the ground it saw, as a share of the
+        reported height above takeoff; the ground's elevation is in the terrain.
+        """
+        guesses = []
+        for i, f in h.fixes.items():
+            tel = self.log[i]["tel"]
+            if tel.above_takeoff and tel.altitude > 0:
+                seen = f.scale * tel.altitude
+                ahead = footprint(self.camera, seen, tel.pitch, tel.roll).center
+                ground = self.terrain.at(np.array([f.x, f.y]) + rot2(f.heading) @ ahead)
+                guesses.append(float(ground) + seen - tel.altitude)
+        if guesses:
+            self.takeoff_elevation = float(np.median(guesses))
 
     # -- per-hypothesis tracking ------------------------------------------
 
@@ -568,6 +615,42 @@ class Localizer:
 
     # -- helpers ----------------------------------------------------------
 
+    def _height_field(self, tel: Telemetry) -> HeightField | None:
+        """The frame's height above the ground anywhere, if it is above takeoff over terrain.
+
+        Where that would be below ``min_altitude_m``, the aircraft is not (NaN).
+        """
+        if not tel.above_takeoff or self.terrain is None or self.takeoff_elevation is None:
+            return None
+        above = self.terrain.height_above(self.takeoff_elevation + tel.altitude)
+        floor = self.cfg.min_altitude_m
+
+        def height(xy: np.ndarray) -> np.ndarray:
+            h = above(xy)
+            return np.where(h >= floor, h, np.nan)
+
+        return height
+
+    def _above_ground(self, frame: Frame) -> Frame:
+        """The frame with its height above the ground at the most likely position, if known."""
+        if self._height is None or (belief := self._belief()) is None:
+            return frame
+        tel = frame.telemetry
+        height = view_height(self._height, self.camera, tel, *belief)
+        if not height > 0:  # the belief would put it underground
+            return frame
+        return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+
+    def _belief(self) -> tuple[np.ndarray, float] | None:
+        """Most likely position and heading: the track, its dead reckoning or the lead candidate."""
+        for w in (self.window, self.dead_reckoning):
+            if w is not None:
+                return w.pose[:2], float(w.pose[2])
+        if self.hypotheses:
+            lead = max(self.hypotheses, key=lambda h: h.mean_score)
+            return lead.xy, float(lead.filter.x[4])
+        return None
+
     def _rolling(self, frame: Frame) -> bool:
         """Tilted beyond the rolling limit while the tilt changes fast (entering a bank)."""
         tel, cfg = frame.telemetry, self.cfg
@@ -586,7 +669,7 @@ class Localizer:
 
     def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
         try:
-            return self.matcher.match(frame, region, self.scale)
+            return self.matcher.match(frame, region, self.scale, self._height)
         except ValueError:  # e.g. camera tilted above the horizon
             return []
 

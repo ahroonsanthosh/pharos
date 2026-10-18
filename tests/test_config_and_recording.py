@@ -40,14 +40,16 @@ def test_recording_round_trip(tmp_path):
     img = np.full((48, 64, 3), 128, np.uint8)
     frames = [
         Frame(0.0, img, Telemetry(100.0, 0.5, 0.01, -0.02)),
-        Frame(0.5, img, Telemetry(101.0, None)),
+        Frame(0.5, img, Telemetry(101.0, None, above_takeoff=True)),
     ]
     truth = [GroundTruth(0.0, 1.0, 2.0, 100.0, 0.4), GroundTruth(0.5, 3.0, 4.0, 101.0, 0.5)]
-    save_recording(Recording(cam, frames, truth), tmp_path)
+    save_recording(Recording(cam, frames, truth, takeoff=(-5.0, 7.5)), tmp_path)
     rec = load_recording(tmp_path)
     assert rec.camera == cam and len(rec) == 2
     loaded = list(rec)
     assert np.isclose(loaded[0].telemetry.yaw, 0.5)
     assert np.isclose(loaded[0].telemetry.roll, -0.02)
     assert loaded[1].telemetry.yaw is None
+    assert [f.telemetry.above_takeoff for f in loaded] == [False, True]
+    assert rec.takeoff == (-5.0, 7.5)
     assert rec.truth is not None and np.isclose(rec.truth[1].heading, 0.5)

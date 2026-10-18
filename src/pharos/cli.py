@@ -24,6 +24,7 @@ from pharos.sim.flight import simulate
 from pharos.sim.scenario import builtin_scenarios, load_scenario
 from pharos.sync import estimate_sync
 from pharos.telemetry import DataflashTelemetry, SrtTelemetry
+from pharos.terrain import Terrain
 from pharos.types import Estimate
 
 
@@ -105,6 +106,13 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
         default=0.0,
         help="seconds from the log's first GNSS fix to the start of the video",
     )
+    p.add_argument(
+        "--log-height",
+        choices=("terrain", "home"),
+        default="terrain",
+        help="ArduPilot heights: the autopilot's terrain database (looked up at its GNSS "
+        "position) if logged, or barometric height above home",
+    )
     p.add_argument("--start", type=float, default=0.0, help="video: skip to this time, seconds")
     p.add_argument("--end", type=float, help="video: stop at this time, seconds")
     p.add_argument(
@@ -114,6 +122,23 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
         default=(0.0, 0.0),
         metavar=("FORWARD", "RIGHT"),
         help="camera tilt the telemetry misses, degrees (pharos probe measures it)",
+    )
+    p.add_argument(
+        "--takeoff",
+        type=float,
+        nargs=2,
+        metavar=("LAT", "LON"),
+        help="where the aircraft took off (default: from the telemetry, if it starts there)",
+    )
+    p.add_argument(
+        "--dem",
+        type=Path,
+        help="terrain model GeoTIFF (default: Copernicus GLO-30, downloaded once and cached)",
+    )
+    p.add_argument(
+        "--no-terrain",
+        action="store_true",
+        help="take heights above takeoff as heights above ground",
     )
     p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
     p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
@@ -130,7 +155,8 @@ def _load_footage_and_map(args):
     if args.srt:
         telemetry = SrtTelemetry(args.srt)
     elif args.log:
-        telemetry = DataflashTelemetry(args.log, sync_s=args.log_sync)
+        terrain_database = args.log_height == "terrain"
+        telemetry = DataflashTelemetry(args.log, args.log_sync, terrain_database=terrain_database)
     footage = load_footage(
         args.footage,
         hfov_deg=args.hfov,
@@ -142,7 +168,32 @@ def _load_footage_and_map(args):
         end_s=args.end,
         mount_offset_deg=tuple(args.mount_offset),
     )
-    return footage, GeoMap.open(args.map).resampled(args.map_gsd)
+    if args.takeoff:
+        footage.takeoff = tuple(args.takeoff)
+    geomap = GeoMap.open(args.map).resampled(args.map_gsd)
+    if args.no_terrain:
+        geomap.terrain = None
+    elif any(t.above_takeoff for t in footage.telemetry) and (args.dem or not geomap.terrain):
+        geomap.terrain = _terrain(geomap, args.dem, footage.takeoff)
+    return footage, geomap
+
+
+def _terrain(geomap: GeoMap, dem: Path | None, takeoff) -> Terrain | None:
+    """The terrain under the map (and the takeoff point), or None if there is none to be had.
+
+    A map saved with its terrain (``GeoMap.save``) keeps it unless ``--dem`` is given.
+    """
+    include = []
+    if takeoff is not None and (xy := geomap.from_latlon(*takeoff)) is not None:
+        include.append(xy)
+    try:
+        if dem is not None:
+            return Terrain.from_dem([dem], geomap, include)
+        print("terrain: Copernicus GLO-30 (the first use downloads about 40 MB per degree tile)")
+        return Terrain.copernicus(geomap, include)
+    except (ImportError, OSError, ValueError) as exc:
+        print(f"warning: no terrain ({exc}); heights above takeoff taken as above ground")
+        return None
 
 
 def _analyze(args) -> None:

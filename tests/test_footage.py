@@ -81,8 +81,14 @@ def test_exports():
 
 
 def test_analyze_recorded_dji_video(small_sim, tmp_path):
+    from dataclasses import replace
+
+    from pharos.terrain import Terrain
+
     geomap, rec = small_sim
-    geomap.save(tmp_path / "map")
+    # The simulated world is flat; its terrain says so (and saves fetching any).
+    flat = Terrain(np.zeros((2, 2), np.float32), 1000.0, 0.0, 1000.0)
+    replace(geomap, terrain=flat, _pyramid={}).save(tmp_path / "map")
     video, _ = write_dji_recording(rec, geomap, tmp_path)  # SRT found next to the video
     out = tmp_path / "out"
     main(
@@ -94,6 +100,8 @@ def test_analyze_recorded_dji_video(small_sim, tmp_path):
     assert summary["confident_wrong"] == 0
     for name in ("track.geojson", "track.kml", "track.csv", "overview.png", "frames.jsonl"):
         assert (out / name).stat().st_size > 0
+    frames = [json.loads(line) for line in (out / "frames.jsonl").read_text().splitlines()]
+    assert any("agl_m" in f for f in frames)  # heights above takeoff, over terrain
 
 
 def test_probe_separates_truth_from_decoys_and_calibrates(small_sim):

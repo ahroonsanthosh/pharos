@@ -1,6 +1,7 @@
 """Matcher and localizer against a small simulated flight."""
 
 import numpy as np
+import pytest
 
 from pharos.eval.bench import localize
 from pharos.eval.metrics import evaluate
@@ -159,3 +160,50 @@ def test_untrusted_track_gives_way_to_consistent_rejected_matches(small_sim):
             results.append(loc._contradicted(float(k), Fix(dx, dy, 0.0, 0.4, 0.2, excess=5.0)))
         assert results[:2] == [False, False]
         assert results[2] is expected
+
+
+def _misreported(frame, factor):
+    """The frame with its height reported ``factor`` times too high, above takeoff."""
+    from dataclasses import replace
+
+    tel = replace(frame.telemetry, altitude=frame.telemetry.altitude * factor, above_takeoff=True)
+    return replace(frame, telemetry=tel)
+
+
+def test_matcher_takes_the_height_above_ground_from_the_terrain(small_sim):
+    geomap, rec = small_sim
+    matcher = CorrelationMatcher(geomap, rec.camera)
+    i = 20
+    frame, g = _misreported(rec.frames[i], 1.3), rec.truth[i]
+
+    # The ground falls away eastwards 1 m in 10, so the true height applies only here.
+    def height(xy):
+        return g.altitude + 0.1 * (np.asarray(xy)[..., 0] - g.x)
+
+    prior = SearchRegion((g.x + 12, g.y - 9), 30, g.heading, np.radians(8))
+    off = matcher.match(frame, prior)[0]  # 30% off: nothing stands out
+    fix = matcher.match(frame, prior, height=height)[0]
+    assert np.hypot(fix.x - g.x, fix.y - g.y) < 5 and abs(fix.scale - 1) < 0.04
+    assert fix.excess > 2 > off.excess
+
+    best = matcher.match(frame, SearchRegion(), height=height)[0]
+    assert np.hypot(best.x - g.x, best.y - g.y) < 10
+    assert not matcher.match(frame, SearchRegion(), height=lambda xy: height(xy) - 1e4)
+
+
+def test_heights_above_takeoff_become_heights_above_ground(hills_sim):
+    """Over hills, with the takeoff point given or its elevation learned from the matches."""
+    geomap, rec = hills_sim
+    true = np.array([g.altitude for g in rec.truth])
+    reported = np.array([f.telemetry.altitude for f in rec.frames])
+    assert np.abs(reported - true).max() > 10
+    elevation = float(geomap.terrain.at(np.array(rec.takeoff)))
+    for takeoff in (rec.takeoff, None):
+        loc = Localizer(geomap, rec.camera, takeoff=takeoff)
+        estimates = [loc.process(f) for f in rec.frames]
+        assert loc.takeoff_elevation == pytest.approx(elevation, abs=2.0)
+        used = np.array([e["tel"].altitude for e in loc.log])
+        corrected = np.array([not e["tel"].above_takeoff for e in loc.log])
+        assert corrected.mean() > 0.6
+        assert np.abs(used - true)[corrected].max() < 6
+        assert evaluate(estimates, rec.truth)["misleading"] == 0
