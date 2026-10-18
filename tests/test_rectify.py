@@ -7,7 +7,13 @@ from pharos.sim.flight import render_frame
 from pharos.sim.scenario import CameraSpec
 from pharos.types import GroundTruth
 from pharos.vision.features import orientation_field
-from pharos.vision.rectify import disk_mask, footprint, nadir_from_patch_center, rectify
+from pharos.vision.rectify import (
+    disk_mask,
+    footprint,
+    frame_mask,
+    nadir_from_patch_center,
+    rectify,
+)
 
 CLEAN = CameraSpec(
     blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0, jpeg_quality=100
@@ -52,3 +58,19 @@ def test_footprint_of_tilted_camera_moves_forward():
     assert tilted.center[1] > 30 and abs(tilted.center[0]) < 1e-6
     # inscribed radius is set by the short (vertical) side of the image
     assert np.isclose(nadir.radius, 100 * 0.75 * np.tan(np.radians(35)), rtol=0.01)
+
+
+def test_frame_mask_covers_the_whole_image_and_turns_with_heading():
+    cam = Camera.from_fov(1280, 720, 77)
+    fp = footprint(cam, 80.0, 0.0, 0.0)
+    gsd = 1.0
+    r = int(fp.extent / gsd)
+    north_up = frame_mask(fp, 0.0, gsd, r)
+    east_up = frame_mask(fp, np.pi / 2, gsd, r)
+    # a wide frame covers much more ground than its inscribed disk
+    assert north_up.sum() > 1.8 * np.pi * fp.radius**2
+    rows, cols = np.nonzero(north_up)
+    assert np.ptp(cols) > 1.6 * np.ptp(rows)  # wide across the heading
+    rows, cols = np.nonzero(east_up)
+    assert np.ptp(rows) > 1.6 * np.ptp(cols)  # flying east: wide north-south
+    assert abs(int(north_up.sum()) - int(east_up.sum())) < 0.03 * north_up.sum()

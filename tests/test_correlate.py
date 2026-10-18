@@ -90,3 +90,16 @@ def test_peak_covariance_is_long_along_a_ridge():
     assert open_cov[1, 1] == pytest.approx(1e4, rel=0.01)
     assert open_cov[0, 0] == pytest.approx(ridge_cov[0, 0], abs=0.1)
     assert peak_covariance(sharp, 50, 50, rho=5, open_variance=1e4)[1, 1] < 4
+
+
+def test_another_mask_scores_as_a_fresh_correlator():
+    img = texture((200, 260))
+    feat = orientation_field(img)
+    valid = np.ones(feat.shape, bool)
+    valid[:, :40] = False
+    rect = np.zeros((61, 61), bool)
+    rect[15:46, 2:59] = True
+    template = feat[70:131, 110:171]
+    shared = Correlator(feat, valid, disk_mask(30)).with_mask(rect)
+    fresh = Correlator(feat, valid, rect)
+    np.testing.assert_allclose(shared.score(template), fresh.score(template), atol=1e-5)

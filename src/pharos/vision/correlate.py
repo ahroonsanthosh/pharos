@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import cv2
 import numpy as np
 from scipy import fft
@@ -34,20 +36,32 @@ class Correlator:
         self._shape = (fft.next_fast_len(H), fft.next_fast_len(W))
         self._out = (H - h + 1, W - w + 1)
         self._tshape = (h, w)
-        self._mask_t = template_mask.astype(np.float32)
+        self._min_overlap = min_overlap
 
-        mi = image_mask.astype(np.float32)
         img = np.where(image_mask, image, 0).astype(np.complex64)
         self._F_img = fft.fft2(img, s=self._shape, workers=-1)
+        energy = (img.real**2 + img.imag**2).astype(np.float32)
+        self._F_energy = fft.rfft2(energy, s=self._shape, workers=-1)
+        self._F_valid = fft.rfft2(image_mask.astype(np.float32), s=self._shape, workers=-1)
+        self._normalize(template_mask)
 
+    def with_mask(self, template_mask: np.ndarray) -> Correlator:
+        """The same search image with another template mask of the same size."""
+        if template_mask.shape != self._tshape:
+            raise ValueError("template mask size differs")
+        other = copy.copy(self)
+        other._normalize(template_mask)
+        return other
+
+    def _normalize(self, template_mask: np.ndarray) -> None:
+        self._mask_t = template_mask.astype(np.float32)
         F_mask_t = np.conj(fft.rfft2(self._mask_t, s=self._shape, workers=-1))
-        energy = self._rcorr(F_mask_t, (img.real**2 + img.imag**2).astype(np.float32))
-        overlap = self._rcorr(F_mask_t, mi)
-        self._invalid = overlap < min_overlap * self._mask_t.sum()
+        energy = self._rcorr(F_mask_t, self._F_energy)
+        overlap = self._rcorr(F_mask_t, self._F_valid)
+        self._invalid = overlap < self._min_overlap * self._mask_t.sum()
         self._inv_energy = 1.0 / np.sqrt(np.maximum(energy, 1e-9))
 
-    def _rcorr(self, F_a_conj: np.ndarray, b: np.ndarray) -> np.ndarray:
-        F_b = fft.rfft2(b, s=self._shape, workers=-1)
+    def _rcorr(self, F_a_conj: np.ndarray, F_b: np.ndarray) -> np.ndarray:
         out = fft.irfft2(F_a_conj * F_b, s=self._shape, workers=-1)
         return out[: self._out[0], : self._out[1]]
 

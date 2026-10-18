@@ -21,7 +21,14 @@ from pharos.vision.correlate import (
     subpixel,
 )
 from pharos.vision.features import FeatureConfig, orientation_field
-from pharos.vision.rectify import Footprint, disk_mask, footprint, nadir_from_patch_center, rectify
+from pharos.vision.rectify import (
+    Footprint,
+    disk_mask,
+    footprint,
+    frame_mask,
+    nadir_from_patch_center,
+    rectify,
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,9 @@ class MatcherConfig:
     sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
     min_overlap: float = 0.75
     open_ridge_m: float = 150.0  # along-ridge uncertainty of a ridge leaving the search window
+    # "disk": the largest disk the image covers, the same for every heading; "frame": all the
+    # ground the image covers (a wide frame covers far more than its inscribed disk).
+    template: str = "disk"
 
 
 @dataclass
@@ -180,8 +190,10 @@ class CorrelationMatcher:
         tel = frame.telemetry
         feat, gsd = self._features(level)
         fps = {s: footprint(self.camera, tel.altitude * s, tel.pitch, tel.roll) for s in scales}
-        radius_m = min(min(fp.radius for fp in fps.values()), self.cfg.max_radius_m)
-        R = int(radius_m / gsd)
+        smallest = fps[min(scales)]  # inside every scale's coverage
+        frame = self.cfg.template == "frame"
+        reach = smallest.extent if frame else smallest.radius
+        R = int(min(reach, self.cfg.max_radius_m) / gsd)
         if R < 8:
             return None
         mask_t = disk_mask(R)
@@ -207,6 +219,10 @@ class CorrelationMatcher:
         best_idx = np.zeros(best.shape, np.int32)
         stack = np.empty((len(headings), len(scales), *best.shape), np.float32) if keep else None
         for hi, heading in enumerate(headings):
+            mask_h, corr_h = mask_t, corr
+            if frame:  # the covered ground turns with the heading, and so does its mask
+                mask_h = frame_mask(smallest, heading, gsd, R)
+                corr_h = corr.with_mask(mask_h)
             for si, s in enumerate(scales):
                 patch = rectify(
                     gray,
@@ -219,7 +235,7 @@ class CorrelationMatcher:
                     R,
                     fps[s],
                 )
-                score = corr.score(orientation_field(patch, mask_t, self.cfg.features))
+                score = corr_h.score(orientation_field(patch, mask_h, self.cfg.features))
                 better = score > best
                 best[better] = score[better]
                 best_idx[better] = hi * len(scales) + si

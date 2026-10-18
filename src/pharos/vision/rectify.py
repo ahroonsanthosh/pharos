@@ -27,11 +27,18 @@ class Footprint:
 
     ``center`` is the optical-axis ground point relative to the nadir point,
     in the heading-up frame (right, forward), metres. ``radius`` is the
-    largest disk around it fully covered by the image.
+    largest disk around it fully covered by the image; ``outline`` is the
+    image border on the ground, relative to ``center`` in the same frame.
     """
 
     center: np.ndarray
     radius: float
+    outline: np.ndarray
+
+    @property
+    def extent(self) -> float:
+        """Distance from the centre to the furthest covered ground."""
+        return float(np.max(np.linalg.norm(self.outline, axis=1)))
 
 
 def footprint(camera: Camera, altitude: float, pitch: float, roll: float) -> Footprint:
@@ -53,13 +60,26 @@ def footprint(camera: Camera, altitude: float, pitch: float, roll: float) -> Foo
     pts = image_to_ground_points(H, border)
     d = np.linalg.norm(pts - center, axis=1)
     radius = float(np.nanmin(d)) if np.any(np.isfinite(d)) else 0.0
-    return Footprint(center=center, radius=radius)
+    outline = pts[np.all(np.isfinite(pts), axis=1)] - center
+    return Footprint(center=center, radius=radius, outline=outline)
 
 
 def disk_mask(radius_px: int) -> np.ndarray:
     n = 2 * radius_px + 1
     yy, xx = np.mgrid[:n, :n] - radius_px
     return (xx * xx + yy * yy) <= radius_px * radius_px
+
+
+def frame_mask(fp: Footprint, heading: float, gsd: float, radius_px: int) -> np.ndarray:
+    """The ground the whole image covers, in a north-up patch as :func:`rectify` renders it,
+    a few pixels inside the border."""
+    n = 2 * radius_px + 1
+    east, north = (rot2(heading) @ fp.outline.T) / gsd
+    pts = np.column_stack([radius_px + east, radius_px - north]).astype(np.float32)
+    mask = np.zeros((n, n), np.uint8)
+    # a frame seen on a plane is convex, whatever order its border was sampled in
+    cv2.fillConvexPoly(mask, np.round(cv2.convexHull(pts)).astype(np.int32), 1)
+    return cv2.erode(mask, np.ones((5, 5), np.uint8)).astype(bool) & disk_mask(radius_px)
 
 
 def rectify(
