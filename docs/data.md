@@ -19,6 +19,7 @@ ideal. 10 m imagery only works from several kilometres up.
 | USGS **NAIP** | contiguous US | 0.6 to 1 m, 4-band | public domain; free on AWS Open Data and Microsoft Planetary Computer |
 | IGN **BD ORTHO** | France | 20 cm | Etalab Open Licence 2.0 (attribution) |
 | IGN **PNOA** | Spain | 25 cm, free WMS (4096 px per request) | CC BY 4.0 |
+| **basemap.at** Orthofoto | Austria | 30 cm, free WMTS (Web Mercator tiles) | CC BY 4.0 |
 | swisstopo **SWISSIMAGE 10 cm** | Switzerland | 10 cm | free since 2021 (attribution) |
 | PDOK **Luchtfoto** | Netherlands | 8 to 25 cm | CC-BY 4.0 / CC0 |
 | Dataforsyningen **orthophotos** | Denmark | 12 cm | free (attribution) |
@@ -94,3 +95,15 @@ recording format above is only needed for simulated flights.
   terrain database enabled give height above terrain instead. Otherwise the
   localizer learns a constant scale error, but not terrain that changes
   along the track; a DEM (e.g. Copernicus GLO-30, free) is the fix.
+* **DJI specifics:** the `.SRT`'s `rel_alt` is height above takeoff even on
+  terrain-following missions: on a real Mavic 3T survey it read 46 to 112 m
+  while the drone held 50 to 63 m above the ground. Its `abs_alt` is above
+  the WGS84 ellipsoid (about 47 m above sea level in Austria), not sea level.
+  `gb_yaw` is the camera's compass heading, so a drone flying sideways on a
+  mission with a fixed heading is handled. An Airdata CSV export of the flight
+  log includes height above ground, which is the simplest fix for testing.
+* **Flying for pharos:** the more ground a frame shows, the better it
+  matches. Fly 100 m or more above the ground with the gimbal straight down,
+  over ground with edges (fields, roads, buildings, water) rather than
+  continuous forest, and give it a straight stretch of 150 m or more to
+  confirm a first position. Below about 80 m, match at `--map-gsd 0.5`.

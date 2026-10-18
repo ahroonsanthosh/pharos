@@ -184,6 +184,18 @@ ten points between runs that differ only in floating-point detail, because one
 acquisition more or less shifts a whole stretch; its longest stretch without
 a trusted position fell from 351 s to under a minute.
 
+**A DJI video.** The *BAMBI* wildlife dataset (Zenodo, CC BY 4.0) publishes
+raw DJI recordings with their `.SRT` files. One 6-minute DJI Mavic 3T segment
+(4K, gimbal straight down, Styria) was run against Austria's free basemap.at
+orthophoto. The DJI path works end to end, and pharos never reported a wrong
+position, but it never confirmed one either: the survey flew 55 m above the
+ground (each frame sees about 70 × 40 m), mostly over continuous autumn forest
+and harvested fields against a summer map, and the true location stood out in
+only 12% of frames. It also showed that DJI's `rel_alt` is height above
+takeoff even on terrain-following missions (46 to 112 m against 50 to 63 m
+above the ground); see [docs/data.md](docs/data.md#from-real-hardware) for
+how to fly and record for pharos.
+
 ### Data and workflow
 
 *PinPoint* (Zenodo, CC BY 4.0) is two flights of an ArduPlane VTOL with a
