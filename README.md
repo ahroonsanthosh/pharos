@@ -201,9 +201,14 @@ position, but it never confirmed one either: the survey flew 55 m above the
 ground (each frame sees about 70 × 40 m), mostly over continuous autumn forest
 and harvested fields against a summer map, and the true location stood out in
 only 12% of frames. It also showed that DJI's `rel_alt` is height above
-takeoff even on terrain-following missions (46 to 112 m against 50 to 63 m
-above the ground); see [docs/data.md](docs/data.md#from-real-hardware) for
-how to fly and record for pharos.
+takeoff even on terrain-following missions: it read 46 to 112 m, a median
+42 m too high, while the drone held 50 to 63 m above the ground. With the
+Copernicus terrain model pharos now brings that to within 3.5 m (median) of
+Airdata's height above ground, most of the rest being forest canopy, which
+the camera sees too. The footage still does not confirm a position: that is
+its height, forest and season, not its heights. See
+[docs/data.md](docs/data.md#from-real-hardware) for how to fly and record
+for pharos.
 
 ### Data and workflow
 

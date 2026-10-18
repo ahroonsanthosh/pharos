@@ -635,20 +635,25 @@ class Localizer:
         """The frame with its height above the ground at the most likely position, if known."""
         if self._height is None or (belief := self._belief()) is None:
             return frame
+        xy, heading, sigma = belief
         tel = frame.telemetry
-        height = view_height(self._height, self.camera, tel, *belief)
+        spread = min(sigma, self.cfg.max_search_m / self.cfg.search_sigmas)
+        height = view_height(self._height, self.camera, tel, xy, heading, spread)
         if not height > 0:  # the belief would put it underground
             return frame
         return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
 
-    def _belief(self) -> tuple[np.ndarray, float] | None:
-        """Most likely position and heading: the track, its dead reckoning or the lead candidate."""
+    def _belief(self) -> tuple[np.ndarray, float, float] | None:
+        """Most likely position, heading and position sigma.
+
+        From the track, its dead reckoning or the lead candidate.
+        """
         for w in (self.window, self.dead_reckoning):
             if w is not None:
-                return w.pose[:2], float(w.pose[2])
+                return w.pose[:2], float(w.pose[2]), w.sigma()
         if self.hypotheses:
             lead = max(self.hypotheses, key=lambda h: h.mean_score)
-            return lead.xy, float(lead.filter.x[4])
+            return lead.xy, float(lead.filter.x[4]), lead.filter.pos_sigma
         return None
 
     def _rolling(self, frame: Frame) -> bool:

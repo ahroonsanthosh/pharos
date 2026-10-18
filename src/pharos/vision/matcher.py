@@ -180,7 +180,8 @@ class CorrelationMatcher:
         tel = frame.telemetry
         base = tel.altitude
         if height is not None:
-            base = view_height(height, self.camera, tel, region.center, region.heading)
+            spread = region.radius / 3  # the search covers three sigmas
+            base = view_height(height, self.camera, tel, region.center, region.heading, spread)
             if not base > 0:  # underground here
                 return None
         altitudes = tuple(base * scale * s for s in cfg.scales)
@@ -335,19 +336,33 @@ class CorrelationMatcher:
 # -- helpers ---------------------------------------------------------------
 
 
+# Unit offsets around a position, to average the terrain over its uncertainty.
+_AROUND = np.array([(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)])
+_AROUND = _AROUND / np.maximum(np.hypot(*_AROUND.T), 1.0)[:, None]
+
+
 def view_height(
-    height: HeightField, camera: Camera, tel: Telemetry, xy, heading: float | None
+    height: HeightField,
+    camera: Camera,
+    tel: Telemetry,
+    xy,
+    heading: float | None,
+    spread: float = 0.0,
 ) -> float:
     """Height above the ground the camera looks at, for an aircraft at ``xy``.
 
-    A tilted camera sees ground ahead of the aircraft, which may lie higher or lower.
+    A tilted camera sees ground ahead of the aircraft, which may lie higher or
+    lower. ``spread`` is the position's uncertainty (m): over a slope a position
+    error is a height error, so the height is averaged over it. NaN if the
+    aircraft would be underground everywhere.
     """
-    xy = np.asarray(xy, float)
-    h = float(height(xy))
-    if heading is None or tel.tilt == 0.0 or not h > 0:
-        return h
-    ahead = footprint(camera, h, tel.pitch, tel.roll).center
-    return float(height(xy + rot2(heading) @ ahead))
+    points = np.asarray(xy, float) + spread * _AROUND if spread > 0 else np.asarray(xy, float)
+    h = np.atleast_1d(height(points))
+    if heading is not None and tel.tilt != 0.0 and (h > 0).any():
+        ahead = footprint(camera, float(h[h > 0].mean()), tel.pitch, tel.roll).center
+        h = np.atleast_1d(height(points + rot2(heading) @ ahead))
+    h = h[h > 0]
+    return float(h.mean()) if len(h) else float("nan")
 
 
 def _selection(select, geomap: GeoMap, level: int, shape, origin, stride: int = 4) -> np.ndarray:
