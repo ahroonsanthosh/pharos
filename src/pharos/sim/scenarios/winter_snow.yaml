@@ -1,0 +1,4 @@
+# Snow cover: most field texture disappears, roads and hedges remain.
+name: winter_snow
+seed: 3
+flight_look: {season: snow, sun_azimuth_deg: 190, sun_elevation_deg: 16, exposure: 0.9, seed: 4}

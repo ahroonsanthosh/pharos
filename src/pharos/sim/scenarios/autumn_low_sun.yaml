@@ -1,0 +1,4 @@
+# Ploughed fields, turning forests and long shadows from a low western sun.
+name: autumn_low_sun
+seed: 2
+flight_look: {season: autumn, sun_azimuth_deg: 235, sun_elevation_deg: 22, seed: 5}

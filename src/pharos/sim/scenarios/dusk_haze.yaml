@@ -1,0 +1,11 @@
+# Bare winter landscape at dusk: very low sun, warm light, haze, low contrast.
+name: dusk_haze
+seed: 4
+flight_look:
+  season: winter
+  sun_azimuth_deg: 250
+  sun_elevation_deg: 9
+  haze: 0.3
+  contrast: 0.8
+  white_balance: [1.2, 1.0, 0.75]
+  seed: 6

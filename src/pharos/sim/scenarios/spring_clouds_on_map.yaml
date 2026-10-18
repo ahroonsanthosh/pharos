@@ -1,0 +1,5 @@
+# Spring flight; the reference map itself has patchy cloud and cloud shadow.
+name: spring_clouds_on_map
+seed: 5
+map_look: {clouds: 0.15, seed: 2}
+flight_look: {season: spring, sun_azimuth_deg: 100, sun_elevation_deg: 40, seed: 3}

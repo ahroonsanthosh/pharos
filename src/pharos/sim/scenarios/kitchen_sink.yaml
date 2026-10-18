@@ -1,0 +1,13 @@
+# Everything at once: autumn, low sun, haze, no compass, tilt, baro bias, land change.
+name: kitchen_sink
+seed: 10
+changes: {replant: 0.6, buildings_removed: 0.15, buildings_added: 20, forest_cleared: 0.15}
+flight_look:
+  season: autumn
+  sun_azimuth_deg: 240
+  sun_elevation_deg: 18
+  haze: 0.2
+  white_balance: [1.1, 1.0, 0.85]
+  seed: 8
+telemetry: {compass: false, altitude_bias: 0.08}
+trajectory: {tilt_deg: 15, yaw_mode: course, yaw_offset_deg: 30}
