@@ -1,6 +1,13 @@
-"""Turn a scenario into a reference map and a simulated flight recording."""
+"""Turn a scenario into a reference map and a simulated flight recording.
+
+Over hills, each frame is rendered as if the ground under the aircraft were
+flat at its own elevation there, and the aircraft reports its barometric
+height above the takeoff point (the first point of the flight).
+"""
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -10,8 +17,9 @@ from pharos.geometry import Camera, ground_to_image, wrap_angle
 from pharos.recording import Recording
 from pharos.sim.appearance import render
 from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
-from pharos.sim.trajectory import generate_trajectory
-from pharos.sim.world import apply_changes, generate_world
+from pharos.sim.trajectory import TrajectorySpec, generate_trajectory
+from pharos.sim.world import apply_changes, generate_terrain, generate_world
+from pharos.terrain import Terrain
 from pharos.types import Frame, GroundTruth, Telemetry
 
 
@@ -23,18 +31,40 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
         raise ValueError("map_gsd must be an integer multiple of world.gsd")
 
     geomap = _satellite_map(render(world, sc.map_look), sc.world.gsd, k, sc.geo_origin)
+    geomap.terrain = generate_terrain(sc.terrain, sc.world.size_m, sc.seed + 4)
     today = apply_changes(world, sc.changes, sc.seed + 1)
     ground = _as_geomap(render(today, sc.flight_look), sc.world.gsd)
 
     camera = Camera.from_fov(sc.camera.width, sc.camera.height, sc.camera.hfov_deg)
     truth = generate_trajectory(sc.trajectory, geomap.extent, sc.seed + 2)
+    above, takeoff = None, None
+    if geomap.terrain is not None:
+        truth, above = _over_terrain(truth, geomap.terrain, sc.trajectory)
+        if sc.telemetry.takeoff_known:
+            takeoff = (truth[0].x, truth[0].y)
     rng = np.random.default_rng(sc.seed + 3)
-    sensors = _SensorModel(sc.telemetry, rng, truth)
+    sensors = _SensorModel(sc.telemetry, rng, truth, above)
     frames = [
         Frame(g.t, render_frame(ground, camera, g, sc.camera, rng), sensors.read(i))
         for i, g in enumerate(truth)
     ]
-    return geomap, Recording(camera, frames, truth)
+    return geomap, Recording(camera, frames, truth, takeoff)
+
+
+def _over_terrain(
+    truth: list[GroundTruth], terrain: Terrain, spec: TrajectorySpec
+) -> tuple[list[GroundTruth], list[float]]:
+    """Poses with heights above the ground below, and the heights above takeoff."""
+    ground = terrain.at(np.array([(g.x, g.y) for g in truth]))
+    if spec.follow_terrain:
+        above = [g.altitude + z - ground[0] for g, z in zip(truth, ground, strict=True)]
+    else:
+        above = [g.altitude for g in truth]
+    agl = [a + ground[0] - z for a, z in zip(above, ground, strict=True)]
+    if min(agl) < 30.0:
+        raise ValueError("the hills reach within 30 m of the aircraft: fly higher")
+    out = [replace(g, altitude=float(h)) for g, h in zip(truth, agl, strict=True)]
+    return out, [float(a) for a in above]
 
 
 def render_frame(
@@ -70,10 +100,18 @@ def render_frame(
 class _SensorModel:
     """Turns true poses into the biased, noisy telemetry an aircraft would report."""
 
-    def __init__(self, spec: TelemetrySpec, rng: np.random.Generator, truth: list[GroundTruth]):
+    def __init__(
+        self,
+        spec: TelemetrySpec,
+        rng: np.random.Generator,
+        truth: list[GroundTruth],
+        above_takeoff: list[float] | None = None,
+    ):
+        """``above_takeoff``: true heights above the takeoff point, reported instead."""
         self.spec = spec
         self.rng = rng
         self.truth = truth
+        self.above_takeoff = above_takeoff
         self.compass_bias = np.radians(spec.compass_bias_deg) * rng.choice([-1, 1])
         self.drift_rate = np.radians(spec.compass_drift_deg_per_min) / 60 * rng.choice([-1, 1])
         self.alt_bias = 1.0 + spec.altitude_bias * rng.choice([-1, 1])
@@ -86,7 +124,9 @@ class _SensorModel:
         """What the aircraft reports alongside frame ``i``."""
         s, rng = self.spec, self.rng
         t = self.truth[i].t
-        g = min(self.truth, key=lambda q: abs(q.t - (t - s.latency_s)))
+        j = min(range(len(self.truth)), key=lambda k: abs(self.truth[k].t - (t - s.latency_s)))
+        g = self.truth[j]
+        height = g.altitude if self.above_takeoff is None else self.above_takeoff[j]
         att = np.radians(s.attitude_noise_deg)
         yaw = None
         if s.compass:
@@ -96,11 +136,12 @@ class _SensorModel:
             )
         return Telemetry(
             altitude=float(
-                g.altitude * self.alt_bias + self.alt_offset + rng.normal(0, s.altitude_noise_m)
+                height * self.alt_bias + self.alt_offset + rng.normal(0, s.altitude_noise_m)
             ),
             yaw=yaw,
             pitch=float(g.pitch + self.mount[0] + rng.normal(0, att)),
             roll=float(g.roll + self.mount[1] + rng.normal(0, att)),
+            above_takeoff=self.above_takeoff is not None,
         )
 
 

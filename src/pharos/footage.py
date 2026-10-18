@@ -9,8 +9,9 @@ its output.
 Height above ground matters (it sets the scale), and photo GPS altitude is a
 trap: the EXIF standard says "above sea level", but many aircraft write the
 height above the WGS84 ellipsoid, which differs by tens of metres. Prefer, in
-order: an explicit ``altitude_m``, DJI's relative altitude, or GPS altitude
-minus ``ground_m`` given in the same vertical reference as the photos.
+order: an explicit ``altitude_m``, DJI's relative altitude (above takeoff,
+which a terrain model corrects), or GPS altitude minus ``ground_m`` given in
+the same vertical reference as the photos.
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ MAX_WIDTH = 1280
 class Footage:
     recording: Recording
     gnss: list[tuple[float, float] | None]  # aircraft-reported position per frame
+    takeoff: tuple[float, float] | None = None  # (lat, lon), if the telemetry shows it
+
+    @property
+    def telemetry(self) -> list[Telemetry]:
+        """Every frame's telemetry, without decoding any image."""
+        return self.recording.frames.telemetry
 
 
 @dataclass(frozen=True)
@@ -163,10 +170,11 @@ def read_photo_info(path: Path) -> PhotoInfo:
 
 
 def _photo_telemetry(info: PhotoInfo, altitude_m: float | None, ground_m: float | None):
+    above_takeoff = False
     if altitude_m is not None:
         altitude = altitude_m
     elif info.relative_altitude is not None:
-        altitude = info.relative_altitude
+        altitude, above_takeoff = info.relative_altitude, True
     elif info.gps_altitude is not None and ground_m is not None:
         altitude = info.gps_altitude - ground_m
     else:
@@ -183,6 +191,7 @@ def _photo_telemetry(info: PhotoInfo, altitude_m: float | None, ground_m: float 
         yaw=None if info.yaw is None else math.radians(info.yaw),
         pitch=math.radians(forward),
         roll=math.radians(right),
+        above_takeoff=above_takeoff,
     )
 
 
@@ -246,9 +255,10 @@ def load_video(
     kept = [(i, s) for i, s in zip(indices, samples, strict=True) if s is not None]
     width = min(w, MAX_WIDTH)
     camera = Camera.from_fov(width, round(h * width / w), hfov_deg)
+    takeoff = telemetry.takeoff if telemetry is not None else None
     telemetry = _offset([s.telemetry for _, s in kept], mount_offset_deg)
     frames = _VideoFrames(path, [i for i, _ in kept], fps, telemetry, width)
-    return Footage(Recording(camera, frames), [s.gnss for _, s in kept])
+    return Footage(Recording(camera, frames), [s.gnss for _, s in kept], takeoff)
 
 
 class _VideoFrames:

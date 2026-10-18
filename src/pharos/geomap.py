@@ -10,6 +10,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from pharos.terrain import Terrain
+
 EARTH_RADIUS_M = 6_378_137.0
 
 
@@ -24,6 +26,10 @@ class GeoMap:
     UTM zone for a GeoTIFF orthophoto) or a local frame whose (0, 0) is at
     ``geo_origin`` = (lat, lon), as the simulator uses. Either way positions
     can be reported as WGS84 latitude/longitude.
+
+    ``terrain`` is the ground elevation under the map, when known: it turns
+    heights above the takeoff point into heights above the ground (see
+    :mod:`pharos.terrain`).
     """
 
     image: np.ndarray
@@ -32,6 +38,7 @@ class GeoMap:
     origin_y: float = 0.0
     geo_origin: tuple[float, float] | None = None
     crs: str | None = None
+    terrain: Terrain | None = None
     _pyramid: dict[int, np.ndarray] = field(default_factory=dict, repr=False)
 
     @property
@@ -79,15 +86,22 @@ class GeoMap:
         return x0 + margin <= x <= x1 - margin and y0 + margin <= y <= y1 - margin
 
     def to_latlon(self, x: float, y: float) -> tuple[float, float] | None:
+        latlon = self.latlon(np.array([x, y]))
+        return None if latlon is None else (float(latlon[0]), float(latlon[1]))
+
+    def latlon(self, xy: np.ndarray) -> np.ndarray | None:
+        """WGS84 (lat, lon) of world positions ``(..., 2)``; None if not georeferenced."""
+        xy = np.asarray(xy, dtype=float)
+        x, y = xy[..., 0], xy[..., 1]
         if self.crs is not None:
             lon, lat = _to_wgs84(self.crs).transform(x, y)
-            return float(lat), float(lon)
+            return np.stack([lat, lon], -1)
         if self.geo_origin is None:
             return None
         lat0, lon0 = self.geo_origin
         lat = lat0 + np.degrees(y / EARTH_RADIUS_M)
         lon = lon0 + np.degrees(x / (EARTH_RADIUS_M * np.cos(np.radians(lat0))))
-        return float(lat), float(lon)
+        return np.stack([lat, lon], -1)
 
     def from_latlon(self, lat: float, lon: float) -> tuple[float, float] | None:
         """World coordinates of a WGS84 position (inverse of :meth:`to_latlon`)."""
@@ -114,14 +128,24 @@ class GeoMap:
         image = cv2.warpAffine(blurred, M, size, flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
         half = (f - 1) / 2 * self.gsd
         return GeoMap(
-            image, gsd, self.origin_x + half, self.origin_y - half, self.geo_origin, self.crs
+            image,
+            gsd,
+            self.origin_x + half,
+            self.origin_y - half,
+            self.geo_origin,
+            self.crs,
+            self.terrain,
         )
 
     def save(self, path: str | Path) -> None:
-        """Write ``<path>.png`` and a ``<path>.json`` georeference sidecar."""
+        """Write ``<path>.png``, a ``<path>.json`` georeference sidecar and any terrain."""
         path = Path(path).with_suffix("")
         path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(path.with_suffix(".png")), self.image)
+        terrain = None
+        if self.terrain is not None:
+            terrain = path.parent / f"{path.name}.terrain.npz"
+            self.terrain.save(terrain)
         meta = {
             "image": path.with_suffix(".png").name,
             "gsd": self.gsd,
@@ -129,6 +153,7 @@ class GeoMap:
             "origin_y": self.origin_y,
             "geo_origin": self.geo_origin,
             "crs": self.crs,
+            "terrain": terrain.name if terrain else None,
         }
         path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
 
@@ -141,6 +166,7 @@ class GeoMap:
         if image is None:
             raise FileNotFoundError(meta_path.parent / meta["image"])
         geo = meta.get("geo_origin")
+        terrain = meta.get("terrain")
         return cls(
             image=image,
             gsd=float(meta["gsd"]),
@@ -148,6 +174,7 @@ class GeoMap:
             origin_y=float(meta.get("origin_y", 0.0)),
             geo_origin=tuple(geo) if geo else None,
             crs=meta.get("crs"),
+            terrain=Terrain.load(meta_path.parent / terrain) if terrain else None,
         )
 
     @classmethod

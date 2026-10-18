@@ -38,6 +38,14 @@ pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry 
 pharos analyze cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5   # ArduPilot
 ```
 
+Barometric heights (DJI subtitles, MAVLink, an ArduPilot log's height above
+home) are measured from the takeoff point, not the ground below. Pharos
+downloads the free Copernicus 30 m terrain model for the map's area (once,
+then cached) and turns them into heights above the ground. It finds the
+takeoff point in telemetry that starts on the ground; otherwise give it with
+`--takeoff LAT LON`, or pharos learns it from its first confirmed position.
+`--dem` uses another elevation model and `--no-terrain` none.
+
 A separate camera and an autopilot log share no clock; `pharos sync` finds
 the offset from the footage alone. On a flight with GNSS, `pharos probe`
 measures per-frame match quality and calibrates the camera once (mount
@@ -72,7 +80,8 @@ pharos serve --open                        # dashboard without Docker
 ## How it works
 
 1. **Rectify.** Each frame is warped onto the ground plane at map
-   resolution using the reported altitude and camera tilt.
+   resolution using its height above the ground (barometric heights are
+   corrected with a terrain model) and camera tilt.
 2. **Describe.** Frame and map become dense orientation fields that keep
    edges (roads, field boundaries, buildings, shorelines) and discard
    intensity, contrast polarity, canopy texture and sun-driven shading.
@@ -184,14 +193,30 @@ ten points between runs that differ only in floating-point detail, because one
 acquisition more or less shifts a whole stretch; its longest stretch without
 a trusted position fell from 351 s to under a minute.
 
+**A DJI video.** The *BAMBI* wildlife dataset (Zenodo, CC BY 4.0) publishes
+raw DJI recordings with their `.SRT` files. One 6-minute DJI Mavic 3T segment
+(4K, gimbal straight down, Styria) was run against Austria's free basemap.at
+orthophoto. The DJI path works end to end, and pharos never reported a wrong
+position, but it never confirmed one either: the survey flew 55 m above the
+ground (each frame sees about 70 × 40 m), mostly over continuous autumn forest
+and harvested fields against a summer map, and the true location stood out in
+only 12% of frames. It also showed that DJI's `rel_alt` is height above
+takeoff even on terrain-following missions: it read 46 to 112 m, a median
+42 m too high, while the drone held 50 to 63 m above the ground. With the
+Copernicus terrain model pharos now brings that to within 3.5 m (median) of
+Airdata's height above ground, most of the rest being forest canopy, which
+the camera sees too. The footage still does not confirm a position: that is
+its height, forest and season, not its heights. See
+[docs/data.md](docs/data.md#from-real-hardware) for how to fly and record
+for pharos.
+
 ### Data and workflow
 
 *PinPoint* (Zenodo, CC BY 4.0) is two flights of an ArduPlane VTOL with a
 consumer camera (Sony IMX477, 1280×720 at 60 fps) on a pitch/yaw servo mount,
 each with its ArduPilot `.bin` log; the camera and autopilot share no clock.
 The map is Spain's PNOA orthophoto (IGN, CC BY 4.0, July 2024) over its free
-WMS. No openly licensed downward-looking DJI video with its `.SRT` could be
-found. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
+WMS. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
 22 s apart, matched against USGS NAIP 2015 (`--map-accuracy 6`: NAIP is good
 to about 6 m).
 
@@ -261,10 +286,9 @@ to about 6 m).
   still stands out in only 62% of frames. Stitching consecutive frames into a
   longer template, or learned features behind the `Matcher` protocol, are the
   next levers.
-* **Terrain in banks.** On flight 2 the ground a banked camera sees is 25 m
-  (rms) from the height under the aircraft; a free DEM (Copernicus GLO-30)
-  would correct odometry there. Near nadir it is only 2 to 4 m, so it is not
-  why flight 2 fails to acquire.
+* **Terrain within a frame.** Heights now follow the terrain, but each frame
+  is still rectified as a plane; a banked camera seeing across flight 2's
+  valley would gain from rectifying onto the elevation model itself.
 * **Lens distortion:** consumer cameras need undistorting; it matters most at
   the image edges a banked view relies on.
 * **More real flights:** a DJI MP4 + SRT gives ground truth for free.
@@ -273,7 +297,7 @@ to about 6 m).
 
 ```
 src/pharos/
-  geometry.py  geomap.py  types.py  recording.py  config.py  cli.py
+  geometry.py  geomap.py  terrain.py  types.py  recording.py  config.py  cli.py
   footage.py  analyze.py  telemetry.py  sync.py
   vision/   rectify, features, correlate, matcher, odometry
   nav/      filter, window, localizer

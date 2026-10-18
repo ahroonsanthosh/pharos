@@ -19,6 +19,7 @@ GNSS and no learned weights, and it runs on a CPU.
 |---|---|
 | `geometry` | All coordinate conventions, camera model, ground-plane homographies. Read this first. |
 | `geomap` | `GeoMap`: north-up orthophoto + affine georeference, pyramid, GeoTIFF loader, WGS84 output. |
+| `terrain` | Ground elevation under a map (Copernicus GLO-30 fetched and cached, or any DEM GeoTIFF). |
 | `types` | Plain dataclasses passed between stages (`Frame`, `Telemetry`, `Fix`, `Estimate`, ...). |
 | `recording` | On-disk flight format shared by the simulator and real flights. Lazy frame decoding. |
 | `vision.rectify` | Warps a frame onto the ground plane at map resolution using altitude and camera tilt. |
@@ -227,6 +228,29 @@ position with an honest sigma is still usable.
 offset (magnetic bias) as unknowns, and accepted fixes slowly update the
 altitude scale used to rectify (baro bias).
 
+**Heights follow the terrain.** Barometric heights (DJI's `rel_alt`,
+MAVLink's `relative_alt`, ArduPilot's height above home) are measured from
+the takeoff point, so over a valley the ground is further away than reported
+and over a hill closer: a terrain-following DJI survey read 46 to 112 m
+while holding 50 to 63 m above the ground. Telemetry marks such heights
+(`above_takeoff`), and over a map with terrain the localizer turns them into
+heights above the ground: the aircraft's elevation (the takeoff's plus the
+reported height) minus the ground's where the camera looks. Odometry uses
+the height at the current position (track, dead reckoning or lead
+candidate). Matching uses it wherever the aircraft might be: a local search
+at its centre, a global search by rendering the frame for a few heights
+20% apart, nearest the expected one first, each scored only where the
+terrain puts the aircraft at that height. The coarse search finds the place
+with the height up to about 10% off, so 20% steps lose nothing, and places
+where the aircraft would be underground are never searched. The takeoff
+elevation comes from the terrain at the takeoff point (`--takeoff`, the
+first position of a log or video that starts on the ground, or MAVLink's
+home position); without one, the first confirmed track supplies it, each of
+its matches measuring the height above the ground it saw. Copernicus GLO-30
+is a surface model: over forest it gives the canopy top, which is what the
+camera sees. Heights the aircraft measured above the ground itself
+(rangefinder, ArduPilot's terrain database) are used as they are.
+
 **Calibration once per camera.** What cannot be learned in flight is
 measured once on a flight with GNSS. `pharos sync` finds the offset between
 a separate camera's video and the autopilot log without GNSS: a wrong offset
@@ -239,10 +263,13 @@ misalignment and the effective field of view from confident matches.
 
 * **Learned matchers** (LightGlue, LoFTR, RoMa) or **learned retrieval**
   (DINOv2/AnyLoc tiles) plug in by implementing `vision.matcher.Matcher`:
-  `match(frame, region, scale) -> list[Fix]`. Keep them in an optional
-  extra so the core stays torch-free.
+  `match(frame, region, scale, height) -> list[Fix]`. Keep them in an
+  optional extra so the core stays torch-free.
 * **IMU** rates or airspeed become more factors in `nav.window`.
-* **Terrain relief**: rectification assumes flat ground. Over hilly terrain,
-  use a DEM to rectify (and use the DEM in the simulator).
+* **Terrain relief within a frame**: heights follow the terrain, but each
+  frame is still rectified as a plane. On steep slopes, or for a banked
+  camera seeing far across a valley, rectifying onto the DEM itself is the
+  next step (and rendering frames over it in the simulator, which today
+  draws each frame as flat ground at the elevation under the aircraft).
 * **Large maps**: map features are precomputed in memory per pyramid level.
   A 10 km × 10 km map at 1 m needs tiling or a coarser global level.

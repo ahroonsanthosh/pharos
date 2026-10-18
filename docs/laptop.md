@@ -108,8 +108,9 @@ drawn in green and gives you the accuracy of every flight.
   * Mission Planner: `Ctrl+F` → *MAVLink* → *UDP Client*, `127.0.0.1`, port `14551`.
 
   Pharos uses rangefinder height when a downward rangefinder reports, else
-  height above home, plus gimbal pitch for camera tilt. Pick **Fixed** mount
-  if the camera is bolted to the frame instead of a gimbal.
+  height above home corrected for terrain (the home position comes over
+  MAVLink), plus gimbal pitch for camera tilt. Pick **Fixed** mount if the
+  camera is bolted to the frame instead of a gimbal.
 * **Video:** a companion computer's RTSP/UDP stream as **Stream URL**, or
   push RTMP/SRT to the laptop as above.
 * **Video delay:** the video arrives later than the telemetry, typically 0.5
@@ -157,10 +158,14 @@ ffmpeg -re -i flight.mp4 -c:v libx264 -tune zerolatency -f flv rtmp://localhost:
 
 ## Limits to know
 
-* Flat ground is assumed. Strong relief (hills, cliffs) adds error.
+* Each frame is treated as flat ground. Strong relief within one view
+  (cliffs, steep valley sides) adds error.
 * Matching needs visible structure: roads, field edges, buildings, water.
   Over forest, open water or uniform snow it will report lost until
   structure returns.
-* Height above ground matters. Barometric height is relative to takeoff;
-  Pharos learns a constant scale error, but over changing terrain a rangefinder
-  helps.
+* Height above ground matters. Barometric height is relative to takeoff, so
+  the first time a feed with such heights runs on a map, Pharos downloads the
+  free Copernicus terrain model for it (about 40 MB per 1 by 1 degree tile,
+  kept in the data folder) and corrects every height for the ground below.
+  Without internet access then, it learns a constant scale error instead,
+  which does not follow terrain that changes along the track.

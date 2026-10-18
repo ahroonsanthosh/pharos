@@ -8,9 +8,11 @@ localizer cannot tell them apart::
       telemetry.jsonl  one line per frame to localize:
                        {"t", "image": "frames/000000.jpg"}  or  {"t", "frame": <video index>}
                        plus "altitude_m", "yaw_deg" (null if no compass),
-                       "pitch_deg", "roll_deg" (camera tilt from nadir)
+                       "pitch_deg", "roll_deg" (camera tilt from nadir),
+                       "above_takeoff": true if altitude_m is above takeoff
       video.mp4        only when telemetry uses "frame" indices
       truth.jsonl      optional {"t", "x", "y", "altitude_m", "heading_deg", ...}
+      takeoff.json     optional {"x", "y"}: where the aircraft took off (map coordinates)
 
 Frames are decoded lazily, so long videos stream from disk.
 """
@@ -34,6 +36,7 @@ class Recording:
     camera: Camera
     frames: Sequence[Frame] | _DiskFrames
     truth: list[GroundTruth] | None = None
+    takeoff: tuple[float, float] | None = None  # (x, y) in map coordinates, if known
 
     def __iter__(self) -> Iterator[Frame]:
         return iter(self.frames)
@@ -61,6 +64,9 @@ def save_recording(rec: Recording, path: str | Path, jpeg_quality: int = 92) -> 
         with open(root / "truth.jsonl", "w") as f:
             for g in rec.truth:
                 f.write(json.dumps(_truth_to_json(g)) + "\n")
+    if rec.takeoff is not None:
+        x, y = rec.takeoff
+        (root / "takeoff.json").write_text(json.dumps({"x": x, "y": y}))
 
 
 def load_recording(path: str | Path) -> Recording:
@@ -70,7 +76,11 @@ def load_recording(path: str | Path) -> Recording:
     truth = None
     if (root / "truth.jsonl").exists():
         truth = [_truth_from_json(r) for r in _read_jsonl(root / "truth.jsonl")]
-    return Recording(camera, _DiskFrames(root, rows), truth)
+    takeoff = None
+    if (root / "takeoff.json").exists():
+        t = json.loads((root / "takeoff.json").read_text())
+        takeoff = (float(t["x"]), float(t["y"]))
+    return Recording(camera, _DiskFrames(root, rows), truth, takeoff)
 
 
 class _DiskFrames:
@@ -129,7 +139,7 @@ def _telemetry_to_json(frame: Frame) -> dict:
         "yaw_deg": _deg(tel.yaw),
         "pitch_deg": math.degrees(tel.pitch),
         "roll_deg": math.degrees(tel.roll),
-    }
+    } | ({"above_takeoff": True} if tel.above_takeoff else {})
 
 
 def _telemetry_from_json(r: dict) -> Telemetry:
@@ -138,6 +148,7 @@ def _telemetry_from_json(r: dict) -> Telemetry:
         yaw=_rad(r.get("yaw_deg")),
         pitch=math.radians(r.get("pitch_deg", 0.0)),
         roll=math.radians(r.get("roll_deg", 0.0)),
+        above_takeoff=bool(r.get("above_takeoff", False)),
     )
 
 

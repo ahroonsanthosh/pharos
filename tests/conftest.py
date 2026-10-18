@@ -4,9 +4,9 @@ import cv2
 import pytest
 
 from pharos.sim.flight import simulate
-from pharos.sim.scenario import Scenario
+from pharos.sim.scenario import Scenario, TelemetrySpec
 from pharos.sim.trajectory import TrajectorySpec
-from pharos.sim.world import WorldSpec
+from pharos.sim.world import TerrainSpec, WorldSpec
 
 
 @pytest.fixture(scope="session")
@@ -27,6 +27,19 @@ def tilted_sim():
         seed=43,
         world=WorldSpec(size_m=700, villages=2, buildings_per_village=20),
         trajectory=TrajectorySpec(duration_s=5, margin_m=200, altitude=150, tilt_deg=25),
+    )
+    return simulate(sc)
+
+
+@pytest.fixture(scope="session")
+def hills_sim():
+    """The small world over 70 m hills, flown 150 m above the takeoff with an unbiased baro."""
+    sc = Scenario(
+        seed=46,
+        world=WorldSpec(size_m=700, villages=2, buildings_per_village=20),
+        terrain=TerrainSpec(relief_m=70, wavelength_m=400),
+        trajectory=TrajectorySpec(duration_s=30, margin_m=170, altitude=150),
+        telemetry=TelemetrySpec(altitude_bias=0.0),
     )
     return simulate(sc)
 

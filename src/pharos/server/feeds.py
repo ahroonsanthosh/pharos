@@ -170,9 +170,16 @@ class Feed:
             if localizer is None:
                 h, w = image.shape[:2]
                 camera = self.camera or Camera.from_fov(w, h, self.spec.hfov_deg)
+                if sample.telemetry.above_takeoff and self.map_name:
+                    geomap = self.store.with_terrain(self.map_name)
                 localizer = Localizer(geomap, camera)
+            home = self.telemetry.takeoff  # a MAVLink home position may come later
+            xy = geomap.from_latlon(*home) if home is not None else None
+            if localizer.takeoff_elevation is None and xy is not None:
+                localizer.set_takeoff(xy)
             estimate = localizer.process(Frame(t, image, sample.telemetry))
-            self.records.append(record(estimate, sample.telemetry, sample.gnss, geomap))
+            used = localizer.log[-1]["tel"]
+            self.records.append(record(estimate, sample.telemetry, sample.gnss, geomap, used))
             preview = cv2.imencode(".jpg", _limit_width(image, PREVIEW_WIDTH))[1]
             self.preview = preview.tobytes()
 
@@ -307,6 +314,7 @@ class PhotoSource:
         self.camera = footage.recording.camera
         self.frames = iter(footage.recording)
         self.gnss = footage.gnss
+        self.takeoff = footage.takeoff
         self.samples: dict[float, TelemetrySample] = {}
 
     def read(self, timeout: float) -> tuple[float, np.ndarray]:
@@ -334,6 +342,7 @@ class DemoSource:
         self.map_name = store.add(f"demo-{sc.name}", geomap)
         self.camera = rec.camera
         self.frames = list(rec.frames)
+        self.takeoff = geomap.to_latlon(*rec.takeoff) if rec.takeoff else None
         truth = rec.truth or []
         self.samples = {
             f.t: TelemetrySample(f.telemetry, geomap.to_latlon(g.x, g.y))

@@ -1,10 +1,16 @@
 """Telemetry that pairs with live or recorded footage: manual, DJI, MAVLink, ArduPilot logs.
 
 Every source answers "what did the aircraft report at time t?" with the
-localizer's :class:`~pharos.types.Telemetry` (height above ground, camera
-tilt, compass) plus, when the aircraft has it, its own GNSS position. The
-GNSS position is never given to the localizer; it is only drawn next to the
-visual estimate so every real flight doubles as an accuracy test.
+localizer's :class:`~pharos.types.Telemetry` (height, camera tilt, compass)
+plus, when the aircraft has it, its own GNSS position. The GNSS position is
+never given to the localizer; it is only drawn next to the visual estimate so
+every real flight doubles as an accuracy test.
+
+Heights are above the ground when a rangefinder or terrain database measured
+them, and otherwise barometric, above the takeoff point. A source also knows
+where the aircraft took off when its record starts on the ground; with a
+terrain model that point's elevation turns heights above takeoff into heights
+above the ground (see :mod:`pharos.terrain`).
 
 Camera tilt follows :mod:`pharos.geometry`: ``pitch`` is the tilt of the
 optical axis forward from straight down, ``roll`` to the right. A gimbal
@@ -35,7 +41,13 @@ class TelemetrySample:
     gnss: tuple[float, float] | None = None  # (lat, lon) reported by the aircraft
 
 
+# Reported heights below this mean the aircraft is still on the ground at takeoff.
+ON_GROUND_M = 2.0
+
+
 class TelemetrySource(Protocol):
+    takeoff: tuple[float, float] | None  # (lat, lon), if the record shows it
+
     def at(self, t: float) -> TelemetrySample | None:
         """Telemetry at ``t``: video time for files, ``time.monotonic()`` for live feeds."""
         ...
@@ -45,6 +57,8 @@ class TelemetrySource(Protocol):
 
 class ManualTelemetry:
     """Fixed values typed into the dashboard; editable while the feed runs."""
+
+    takeoff = None
 
     def __init__(self, altitude: float, pitch: float = 0.0, roll: float = 0.0):
         self.telemetry = Telemetry(altitude=altitude, pitch=pitch, roll=roll)
@@ -65,6 +79,7 @@ _SRT_TIME = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->")
 _SRT_NUMBER = re.compile(r"([A-Za-z_]+)\s*:\s*(-?\d+(?:\.\d+)?)")
 _SRT_LEGACY_GPS = re.compile(r"GPS\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)")
 _SRT_LEGACY_BARO = re.compile(r"BAROMETER\s*:\s*(-?[\d.]+)")
+_SRT_LEGACY_HOME = re.compile(r"HOME\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)")
 
 
 class SrtTelemetry:
@@ -72,13 +87,20 @@ class SrtTelemetry:
 
     Handles the bracketed format of recent models (``[rel_alt: 120.5 ...]``,
     ``[gb_pitch: -90.0 ...]``) and the older ``GPS(lon,lat,alt) BAROMETER:h``
-    format. Height above ground is taken as height above the takeoff point.
+    format. Heights are above the takeoff point, also on terrain-following
+    missions. The takeoff point is the older format's ``HOME``, or the first
+    position if the video starts on the ground.
     """
 
     def __init__(self, path: str | Path):
-        self.samples = parse_dji_srt(Path(path).read_text(errors="replace"))
+        text = Path(path).read_text(errors="replace")
+        self.samples = parse_dji_srt(text)
         if not self.samples:
             raise ValueError(f"{path}: no telemetry found in SRT file")
+        first = self.samples[0][1]
+        self.takeoff = first.gnss if abs(first.telemetry.altitude) < ON_GROUND_M else None
+        if (home := _SRT_LEGACY_HOME.search(text)) is not None:
+            self.takeoff = (float(home.group(2)), float(home.group(1)))
 
     def at(self, t: float) -> TelemetrySample | None:
         # Subtitle entries are sorted by time; take the last one starting at or before t.
@@ -121,6 +143,7 @@ def parse_dji_srt(text: str) -> list[tuple[float, TelemetrySample]]:
             yaw=None if yaw is None else math.radians(yaw),
             pitch=math.radians(90.0 + gimbal_pitch),
             roll=math.radians(values.get("gb_roll", 0.0)),
+            above_takeoff=True,
         )
         gnss = (lat, lon) if lat is not None and lon is not None and (lat or lon) else None
         out.append((t, TelemetrySample(telemetry, gnss)))
@@ -148,9 +171,10 @@ class DataflashTelemetry:
     GNSS fix. Find it once per flight, for example from the takeoff moment.
 
     Height above ground comes from the autopilot's terrain database
-    (``TERRAIN_ENABLE``, looked up at its own position estimate) when the log
-    has it, else from the height above home, which assumes the ground stays at
-    takeoff level.
+    (``TERRAIN_ENABLE``, looked up at its own position estimate, so from GNSS)
+    when the log has it and ``terrain_database`` is set, else it is the
+    barometric height above home. The log's first GNSS fix is the takeoff
+    point if the aircraft was still on the ground then.
 
     Camera attitude composes the airframe attitude (``ATT``) with the first
     mount (``MNT``): a servo mount (``MNT1_TYPE`` 1) logs body-frame servo
@@ -159,7 +183,13 @@ class DataflashTelemetry:
     ``mount_pitch`` (radians). Reading logs needs ``pymavlink`` (``pharos[server]``).
     """
 
-    def __init__(self, path: str | Path, sync_s: float = 0.0, mount_pitch: float = 0.0):
+    def __init__(
+        self,
+        path: str | Path,
+        sync_s: float = 0.0,
+        mount_pitch: float = 0.0,
+        terrain_database: bool = True,
+    ):
         series, params = _read_dataflash(Path(path))
         gps = series["GPS"][series["GPS"][:, 1] >= 3]
         if not len(gps) or not len(series["ATT"]) or not len(series["POS"]):
@@ -170,7 +200,11 @@ class DataflashTelemetry:
         self._att[:, 0] = series["ATT"][:, 0]
         self._att[:, 3] = np.unwrap(self._att[:, 3])
         terrain = series["TERR"][series["TERR"][:, 1] == _TERRAIN_OK]
-        self._height = terrain[:, [0, 2]] if len(terrain) else series["POS"]
+        self.above_takeoff = not (terrain_database and len(terrain))
+        self._height = series["POS"] if self.above_takeoff else terrain[:, [0, 2]]
+        home = series["POS"]
+        on_ground = abs(np.interp(gps[0, 0], home[:, 0], home[:, 1])) < ON_GROUND_M
+        self.takeoff = (float(gps[0, 2]), float(gps[0, 3])) if on_ground else None
         mount = series["MNT"][~np.isnan(series["MNT"][:, 2])]
         self._mount = _mount_angles(mount[:, 0], np.radians(np.nan_to_num(mount[:, 1:])))
         self._mount_body_frame = params.get("MNT1_TYPE") == 1
@@ -199,7 +233,7 @@ class DataflashTelemetry:
         gnss = None
         if self._gnss[0, 0] <= when <= self._gnss[-1, 0]:
             gnss = tuple(float(np.interp(when, self._gnss[:, 0], self._gnss[:, k])) for k in (1, 2))
-        return TelemetrySample(Telemetry(height, cam_yaw, tilt, side), gnss)
+        return TelemetrySample(Telemetry(height, cam_yaw, tilt, side, self.above_takeoff), gnss)
 
     def close(self) -> None:
         pass
@@ -258,7 +292,8 @@ class MavlinkTelemetry:
 
     Listens on ``endpoint`` (default ``udpin:0.0.0.0:14551``, a port ground
     stations forward to). Height comes from a downward rangefinder when one
-    reports, else from ``GLOBAL_POSITION_INT.relative_alt``. Camera tilt comes
+    reports, else from ``GLOBAL_POSITION_INT.relative_alt`` (above home, whose
+    position ``HOME_POSITION`` gives). Camera tilt comes
     from the gimbal (``GIMBAL_DEVICE_ATTITUDE_STATUS`` or ``MOUNT_STATUS``) or,
     with ``mount="fixed"``, from the airframe attitude plus ``mount_pitch``.
     """
@@ -289,6 +324,10 @@ class MavlinkTelemetry:
             if sample is not None:
                 self._history.append((time.monotonic(), sample))
 
+    @property
+    def takeoff(self) -> tuple[float, float] | None:
+        return self.state.home
+
     def at(self, t: float) -> TelemetrySample | None:
         """The last sample received at or before monotonic time ``t``."""
         history = list(self._history)
@@ -314,6 +353,7 @@ class MavlinkState:
         self.attitude = (0.0, 0.0, 0.0)  # roll, pitch, yaw of the airframe (rad, NED)
         self.gimbal: tuple[float, float] | None = None  # roll, pitch (rad, earth frame)
         self.gnss: tuple[float, float] | None = None
+        self.home: tuple[float, float] | None = None
         self.yaw: float | None = None
 
     def handle(self, msg) -> None:
@@ -322,6 +362,8 @@ class MavlinkState:
             self.altitude = msg.relative_alt / 1000.0
             if msg.lat or msg.lon:
                 self.gnss = (msg.lat / 1e7, msg.lon / 1e7)
+        elif kind == "HOME_POSITION":
+            self.home = (msg.latitude / 1e7, msg.longitude / 1e7)
         elif kind == "ATTITUDE":
             self.attitude = (msg.roll, msg.pitch, msg.yaw)
             self.yaw = msg.yaw
@@ -337,9 +379,9 @@ class MavlinkState:
             self.gimbal = (math.radians(msg.pointing_b / 100), math.radians(msg.pointing_a / 100))
 
     def sample(self, mount: str, mount_pitch: float) -> TelemetrySample | None:
-        altitude = self.altitude
+        altitude, above_takeoff = self.altitude, True
         if self.range is not None and time.monotonic() - self.range[1] < self.STALE_S:
-            altitude = self.range[0]
+            altitude, above_takeoff = self.range[0], False
         if altitude is None:
             return None
         roll, pitch, _ = self.attitude
@@ -350,4 +392,4 @@ class MavlinkState:
             tilt, side = math.pi / 2 + self.gimbal[1], self.gimbal[0]
         else:
             tilt, side = 0.0, 0.0  # stabilized gimbal assumed to point straight down
-        return TelemetrySample(Telemetry(altitude, self.yaw, tilt, side), self.gnss)
+        return TelemetrySample(Telemetry(altitude, self.yaw, tilt, side, above_takeoff), self.gnss)

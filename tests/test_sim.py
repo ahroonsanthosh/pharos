@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -78,3 +80,25 @@ def test_sensor_errors_are_applied():
     tel = _SensorModel(spec, np.random.default_rng(0), truth).read(5)
     assert np.isclose(np.hypot(tel.pitch, tel.roll), np.radians(2.0))
     assert abs(tel.altitude - 103.0) == 10.0  # sampled 1 s (two frames) early, then offset
+
+
+def test_over_hills_heights_are_reported_above_the_takeoff_point():
+    from pharos.sim.flight import _over_terrain
+    from pharos.sim.trajectory import TrajectorySpec
+    from pharos.sim.world import TerrainSpec, generate_terrain
+    from pharos.terrain import Terrain
+    from pharos.types import GroundTruth
+
+    hills = generate_terrain(TerrainSpec(relief_m=50.0), 1000.0, seed=3)
+    assert hills.elevation.min() == pytest.approx(0) and hills.elevation.max() == pytest.approx(50)
+    assert generate_terrain(TerrainSpec(), 1000.0, seed=3) is None
+
+    ramp = Terrain(np.array([[0.0, 40.0], [0.0, 40.0]], np.float32), 400.0, 0.0, 400.0)
+    truth = [GroundTruth(0.0, x, 200.0, 100.0, 0.0) for x in (0.0, 200.0, 400.0)]
+    held, above = _over_terrain(truth, ramp, TrajectorySpec())
+    assert [g.altitude for g in held] == pytest.approx([100, 80, 60]) and above == [100] * 3
+    kept, above = _over_terrain(truth, ramp, TrajectorySpec(follow_terrain=True))
+    assert [g.altitude for g in kept] == pytest.approx([100] * 3)
+    assert above == pytest.approx([100, 120, 140])
+    with pytest.raises(ValueError, match="fly higher"):
+        _over_terrain([replace(g, altitude=50.0) for g in truth], ramp, TrajectorySpec())

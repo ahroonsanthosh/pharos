@@ -59,6 +59,19 @@ def test_srt_lookup_by_video_time(tmp_path):
     assert srt.at(-1.0).telemetry.altitude == 120.5
 
 
+def test_srt_heights_are_above_the_takeoff_point(tmp_path):
+    path = tmp_path / "DJI_0001.SRT"
+    path.write_text(MODERN_SRT)
+    srt = SrtTelemetry(path)
+    assert srt.at(0.0).telemetry.above_takeoff
+    assert srt.takeoff is None  # the video starts in the air
+
+    path.write_text(MODERN_SRT.replace("rel_alt: 120.500", "rel_alt: 0.300"))
+    assert SrtTelemetry(path).takeoff == (46.951234, 7.441234)  # starts on the ground
+    path.write_text(LEGACY_SRT)
+    assert SrtTelemetry(path).takeoff == (46.95, 7.44)  # the older format's HOME
+
+
 class Msg:
     def __init__(self, kind, **fields):
         self._kind = kind
@@ -92,6 +105,16 @@ def test_mavlink_state_gimbal_and_rangefinder():
         )
     )
     assert s.sample("gimbal", 0.0).telemetry.altitude == 142.0
+    assert not s.sample("gimbal", 0.0).telemetry.above_takeoff
+
+
+def test_mavlink_heights_above_home_and_the_home_position():
+    s = MavlinkState()
+    s.handle(Msg("GLOBAL_POSITION_INT", relative_alt=150_000, lat=469512340, lon=74412340))
+    assert s.sample("gimbal", 0.0).telemetry.above_takeoff
+    assert s.home is None
+    s.handle(Msg("HOME_POSITION", latitude=469500000, longitude=74400000))
+    assert s.home == pytest.approx((46.95, 7.44))
 
 
 def test_mavlink_state_fixed_mount_follows_airframe():
@@ -142,11 +165,20 @@ LOG_FORMATS = {
 }
 
 
-def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=True, locked=None):
+def write_log(
+    path,
+    mount_type=1,
+    mount=(0.0, -90.0, 0.0),
+    roll=10.0,
+    terrain=True,
+    locked=None,
+    takeoff_s=None,
+):
     """12 s of level flight heading east, banked ``roll`` degrees; 3D fix from 2 s.
 
     ``locked``: every other mount row is logged as these (roll, pitch, yaw) instead,
-    the way ArduPilot writes a mount at gimbal lock.
+    the way ArduPilot writes a mount at gimbal lock. ``takeoff_s``: on the ground
+    (at height 0 above home) until then.
     """
     lines = ["FMT, 128, 89, FMT, BBnNZ, Type,Length,Name,Format,Columns"]
     for i, (name, (fmt, cols)) in enumerate(LOG_FORMATS.items()):
@@ -161,7 +193,8 @@ def write_log(path, mount_type=1, mount=(0.0, -90.0, 0.0), roll=10.0, terrain=Tr
         if mount is not None:
             m = locked if locked is not None and k % 2 else mount
             lines.append(f"MNT, {us}, 0, {m[0]}, {m[1]}, {m[2]}")
-        lines.append(f"POS, {us}, 100.0")
+        on_ground = takeoff_s is not None and us < takeoff_s * 1e6
+        lines.append(f"POS, {us}, {0.0 if on_ground else 100.0}")
         if terrain and k % 10 == 0:
             lines.append(f"TERR, {us}, 2, 110.0")
     path.write_text("\n".join(lines) + "\n")
@@ -179,6 +212,16 @@ def test_dataflash_servo_mount_sees_the_bank(tmp_path):
     assert math.degrees(tel.roll) == pytest.approx(-10.0, abs=1e-4)  # no roll axis
     assert sample.gnss == pytest.approx((41.7005, -0.7))
     assert log.at(-4.0) is None and log.at(20.0) is None
+    assert not tel.above_takeoff and log.takeoff is None  # airborne at the first fix
+
+
+def test_dataflash_barometric_heights_and_takeoff_point(tmp_path):
+    pytest.importorskip("pymavlink")
+    path = write_log(tmp_path / "flight.log", takeoff_s=4.0)
+    log = DataflashTelemetry(path, terrain_database=False)
+    tel = log.at(5.0).telemetry
+    assert tel.altitude == pytest.approx(100.0) and tel.above_takeoff
+    assert log.takeoff == pytest.approx((41.7002, -0.7))  # on the ground at the first fix
 
 
 def test_dataflash_stabilized_gimbal_and_fixed_camera(tmp_path):
