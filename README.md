@@ -108,18 +108,18 @@ initial position) against a summer reference map:
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | cover | mislead | gap s | in 3 sd | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.3 | 3.1 | 0.1 | 84% | 0.0% | 10 | 100% | 195 |
-| autumn_low_sun | 84% | 9.5 | 2.0 | 4.2 | 0.1 | 84% | 0.0% | 10 | 100% | 217 |
-| dusk_haze | 66% | 10.0 | 2.1 | 8.6 | 0.9 | 66% | 0.0% | 10 | 99% | 216 |
-| grid_farmland | 85% | 9.0 | 1.6 | 3.5 | 0.2 | 85% | 0.0% | 9 | 100% | 179 |
-| kitchen_sink | 68% | 9.5 | 2.3 | 5.3 | 0.6 | 68% | 0.0% | 10 | 100% | 163 |
-| land_change | 84% | 9.5 | 2.2 | 3.5 | 0.1 | 84% | 0.0% | 10 | 100% | 195 |
-| no_compass_spinning | 84% | 9.5 | 2.0 | 3.9 | 0.1 | 84% | 0.0% | 10 | 100% | 179 |
-| nominal | 85% | 9.0 | 1.4 | 2.4 | 0.1 | 85% | 0.0% | 9 | 100% | 167 |
-| sensor_errors | 84% | 9.5 | 6.7 | 8.8 | 0.3 | 84% | 0.0% | 10 | 100% | 152 |
-| spring_clouds_on_map | 56% | 9.5 | 2.4 | 5.5 | 0.4 | 56% | 0.0% | 17 | 100% | 156 |
-| tilted_camera | 85% | 9.0 | 1.2 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 165 |
-| winter_snow | 69% | 18.5 | 1.6 | 2.8 | 0.1 | 69% | 0.0% | 18 | 100% | 181 |
+| altitude_bias | 84% | 9.5 | 1.3 | 3.2 | 0.2 | 84% | 0.0% | 10 | 100% | 249 |
+| autumn_low_sun | 85% | 9.0 | 1.9 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 247 |
+| dusk_haze | 73% | 9.5 | 1.8 | 14.2 | 0.5 | 72% | 0.8% | 10 | 97% | 254 |
+| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 215 |
+| kitchen_sink | 48% | 31.5 | 1.8 | 3.5 | 0.3 | 48% | 0.0% | 32 | 100% | 232 |
+| land_change | 84% | 9.5 | 2.4 | 4.1 | 0.1 | 84% | 0.0% | 10 | 100% | 211 |
+| no_compass_spinning | 84% | 9.5 | 2.1 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 230 |
+| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 256 |
+| sensor_errors | 84% | 9.5 | 7.1 | 9.1 | 0.4 | 84% | 0.0% | 10 | 100% | 200 |
+| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.6 | 0.3 | 56% | 0.0% | 17 | 100% | 209 |
+| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 190 |
+| winter_snow | 86% | 8.5 | 1.5 | 3.0 | 0.1 | 86% | 0.0% | 8 | 100% | 199 |
 <!-- bench:end -->
 
 Columns: share of frames trusted (`tracking`), time to first confirmed
@@ -129,15 +129,18 @@ error, accurate coverage (trusted and within 25 m) and the misleading rate
 a trusted position, the share of trusted positions within three reported
 sigmas, and median processing time per frame on a loaded 4-core CPU.
 
-No scenario reports a wrong position as trusted, and reported uncertainties
-hold. Coverage tops out near 85% because a candidate must cover 120 m of new
+Reported uncertainties hold, and only one frame in the whole benchmark is
+trusted and wrong: in `dusk_haze`, low sun shifts shadow edges into a run of
+strong matches 20 m off, and the track follows them to 26 m with an 8 m
+sigma. Coverage tops out near 85% because a candidate must cover 120 m of new
 ground (about 10 s) before it is trusted. Lower rows report the missing
 frames as coasting, not wrong: in `spring_clouds_on_map`, `kitchen_sink` and
 `dusk_haze`, clouds on the map, haze and forest leave stretches where too
-little matches for a 10 m uncertainty; `winter_snow` needs longer to find a
-distinctive start;
-`sensor_errors` shows that a 2° camera mount misalignment becomes a ~6 m bias
-that no single frame can reveal.
+little matches for a 10 m uncertainty, and `kitchen_sink` takes 30 s to find
+a distinctive start (the frame-sized template, a clear win on real 16:9
+video, is mixed on this 4:3 camera: `winter_snow` now starts in 9 s instead
+of 19 s); `sensor_errors` shows that a 2° camera mount misalignment becomes a
+~6 m bias that no single frame can reveal.
 
 The simulator is still kinder than reality (flat ground, the map and the
 drone view share exact geometry). Expect real cross-season match scores to be
@@ -156,28 +159,30 @@ position against its own sigma.
 
 | flight | | covered | misleading | trusted within 3σ | any position within 25 m | any position within 3σ |
 |---|---|---:|---:|---:|---:|---:|
-| PinPoint 1: farmland, ~105 m, 13 min | live | 52% | 0.3% | 99% | 87% | 99% |
-| | whole flight | 86% | 0.4% | 99% | 97% | 99% |
-| PinPoint 2: river valley, ~80 m, 15 min | live | 11% | 0.0% | 99% | 43% | 100% |
-| | whole flight | 32% | 0.0% | 100% | 57% | 100% |
-| Aukerman: 77 photos, ~100 m | live | 19% | 0.0% | 100% | 35% | 100% |
-| | whole flight | 35% | 0.0% | 100% | 70% | 100% |
+| PinPoint 1: farmland, ~105 m, 13 min | live | 67% | 0.0% | 100% | 91% | 100% |
+| | whole flight | 93% | 0.0% | 100% | 99% | 100% |
+| PinPoint 2: river valley, ~80 m, 15 min | live | 40% | 0.0% | 99% | 74% | 100% |
+| | whole flight | 73% | 0.0% | 100% | 89% | 100% |
+| Aukerman: 77 photos, ~100 m | live | 22% | 0.0% | 100% | 39% | 100% |
+| | whole flight | 43% | 0.0% | 100% | 77% | 100% |
 
 *Live* is what the aircraft would have been told in flight; *whole flight*
 is `pharos analyze` on the recording, solved at once. Flight 2 was localized
 with the camera calibration from flight 1, out of sample.
 
-The headline is honesty rather than coverage. Reported uncertainties hold
-on every flight: 99% or more of positions, trusted or coasting, are within
-three sigmas of GNSS, and the misleading rate is at most 0.4%. The previous
-version reported 3.4% of flight 2's frames as trusted and wrong, and only a
-third of its positions were within their sigma. Flight 2 now carries a
-position within 25 m in 57% of its frames (from 33%), most of it coasting.
-The cost is trusted coverage where matching was already good: flight 1's
-whole-flight coverage fell from 97% to 86% (live, 70% to 52%) and
-Aukerman's from 49% to 35%, because positions that were trusted on
-optimistic sigmas now coast on honest ones; 97% of flight 1's frames still
-carry a position within 25 m.
+No frame of any flight is trusted and wrong, and reported uncertainties hold:
+99% or more of positions, trusted or coasting, are within three sigmas of
+GNSS. Two changes got here. Making the uncertainty honest (dead reckoning,
+overlapping matches counted as one, the estimator fixes below) removed the
+previous version's misleading frames (3.4% of flight 2's) but cost trusted
+coverage, since positions trusted on optimistic sigmas then coasted. Matching
+the whole frame instead of the disk inside it then won that coverage back
+and more. Against the previous version, whole flight: flight 1 97% to 93%,
+flight 2 31% to 73%, Aukerman 49% to 43%; live: flight 1 70% to 67%,
+flight 2 15% to 40%, Aukerman 17% to 22%. Flight 2's results vary by about
+ten points between runs that differ only in floating-point detail, because one
+acquisition more or less shifts a whole stretch; its longest stretch without
+a trusted position fell from 351 s to under a minute.
 
 ### Data and workflow
 
@@ -199,6 +204,12 @@ to about 6 m).
 
 ### What real footage taught
 
+* **Use the whole frame.** Matching took the largest disk inside the frame, so
+  a 16:9 camera used only its short side. At flight 2's 80 m that was 72 m
+  of ground out of 127 × 71 m; matching all of it, the true location stood
+  out from noise in 62% of frames instead of 40%, and at a stricter
+  threshold chance peaks passed less often than before. This one change took
+  flight 2 from 32% to 73% covered.
 * **Overlapping frames are one observation.** Consecutive frames see the same
   ground, so a look-alike fools a run of them alike. Counted as independent,
   sixteen such matches in a test outvoted odometry and the solve claimed 3 to
@@ -235,15 +246,21 @@ to about 6 m).
   50% scale error at 100 m), and the eBee's camera attitude convention had to
   be read from the data. The map whose season matches the flight wins.
 * **Tried and rejected:** averaging aligned score maps over several frames
-  (flight 1 live coverage 70% to 62%, misleading 0.5% to 1.4%), and a 12 m
-  trust threshold (flight 2 misleading 6.3%).
+  (flight 1 live coverage 70% to 62%, misleading 0.5% to 1.4%); a 12 m trust
+  threshold (flight 2 misleading 6.3%); counting nearby matches as only
+  partly correlated (more coverage, but look-alike runs back: flight 1
+  misleading 0.4% to 0.9%); and full confirmation for a place that
+  contradicted a coasting track (flight 2 live coverage 40% to 21%).
 
 ## Next steps
 
-* **Flight 2's long gaps are acquisition.** Over its valley the true place
-  stands out from noise in only 43% of frames (`pharos probe`), and minutes
-  pass without a candidate winning. Better features for low texture
-  (learned matchers behind the `Matcher` protocol) are the lever.
+* **Acquisition speed.** A whole-map search normalizes the frame-shaped
+  template once per heading and takes about twice as long as with the disk;
+  a nadir footprint is symmetric, so half of those could be shared.
+* **More information per match.** Over flight 2's valley the true place
+  still stands out in only 62% of frames. Stitching consecutive frames into a
+  longer template, or learned features behind the `Matcher` protocol, are the
+  next levers.
 * **Terrain in banks.** On flight 2 the ground a banked camera sees is 25 m
   (rms) from the height under the aircraft; a free DEM (Copernicus GLO-30)
   would correct odometry there. Near nadir it is only 2 to 4 m, so it is not
