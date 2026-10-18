@@ -78,7 +78,9 @@ class LocalizerConfig:
     confirm_margin: float = 0.06  # mean-score lead over the runner-up
     # Tracking
     track_min_score: float = 0.18
-    track_min_excess: float = 1.5  # a match must stand out from its window's noise
+    # A match must stand out from its window's noise. With the frame-sized template, 2 keeps
+    # fewer chance peaks than 1.5 did with the disk and still finds more true ones.
+    track_min_excess: float = 2.0
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
     # A confirmed track keeps searching around its prediction (reported as coasting) while
     # the window that needs stays within max_search_m, for up to max_coast_s. Longer coasts

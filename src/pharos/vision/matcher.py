@@ -66,9 +66,10 @@ class MatcherConfig:
     sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
     min_overlap: float = 0.75
     open_ridge_m: float = 150.0  # along-ridge uncertainty of a ridge leaving the search window
-    # "disk": the largest disk the image covers, the same for every heading; "frame": all the
-    # ground the image covers (a wide frame covers far more than its inscribed disk).
-    template: str = "disk"
+    # "frame": all the ground the image covers; "disk": the largest disk inside it, the same
+    # for every heading. On real 16:9 video at 80 m the frame covers 2.3 times the ground,
+    # and the true location stood out in 62% of frames instead of 40%.
+    template: str = "frame"
 
 
 @dataclass
@@ -214,6 +215,18 @@ class CorrelationMatcher:
             return None
         corr = Correlator(roi, valid, mask_t, self.cfg.min_overlap)
 
+        # A heading only turns the patch about its centre, so features are computed once per
+        # scale, heading-up, and turned for each heading hypothesis.
+        mask_up = frame_mask(smallest, 0.0, gsd, R) if frame else mask_t
+        upright = {
+            s: orientation_field(
+                rectify(gray, self.camera, tel.altitude * s, tel.pitch, tel.roll, 0.0, gsd, R, fp),
+                mask_up,
+                self.cfg.features,
+            )
+            for s, fp in fps.items()
+        }
+
         # One score per template offset, maximized over all hypotheses.
         best = np.full((roi.shape[0] - 2 * R, roi.shape[1] - 2 * R), -1.0, np.float32)
         best_idx = np.zeros(best.shape, np.int32)
@@ -224,18 +237,7 @@ class CorrelationMatcher:
                 mask_h = frame_mask(smallest, heading, gsd, R)
                 corr_h = corr.with_mask(mask_h)
             for si, s in enumerate(scales):
-                patch = rectify(
-                    gray,
-                    self.camera,
-                    tel.altitude * s,
-                    tel.pitch,
-                    tel.roll,
-                    heading,
-                    gsd,
-                    R,
-                    fps[s],
-                )
-                score = corr_h.score(orientation_field(patch, mask_h, self.cfg.features))
+                score = corr_h.score(_turned(upright[s], heading))
                 better = score > best
                 best[better] = score[better]
                 best_idx[better] = hi * len(scales) + si
@@ -263,6 +265,27 @@ def _gray(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         return image
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def _turned(field: np.ndarray, heading: float) -> np.ndarray:
+    """A heading-up orientation field as the north-up patch for ``heading`` would give it.
+
+    Patch pixels turn by ``heading`` about the centre (clockwise on screen, rows run
+    south), and the doubled-angle orientations with them.
+    """
+    if heading == 0.0:
+        return field
+    n = field.shape[0]
+    r = (n - 1) / 2
+    c, s = np.cos(heading), np.sin(heading)
+    rot = np.array([[c, s], [-s, c]])  # new pixel offset -> heading-up pixel offset
+    M = np.column_stack([rot, r - rot @ np.array([r, r])])
+    flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
+    parts = [
+        cv2.warpAffine(np.ascontiguousarray(p), M, (n, n), flags=flags)
+        for p in (field.real, field.imag)
+    ]
+    return ((parts[0] + 1j * parts[1]) * np.exp(2j * heading)).astype(np.complex64)
 
 
 def _heading_grid(center: float | None, span: float, step: float) -> np.ndarray:

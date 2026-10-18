@@ -106,10 +106,11 @@ def test_probe_separates_truth_from_decoys_and_calibrates(small_sim):
     geomap, rec = small_sim
     gnss = [geomap.to_latlon(g.x, g.y) for g in rec.truth]
     footage = Footage(Recording(rec.camera, rec.frames, rec.truth), gnss)
-    summary = summarize_probe(probe(footage, geomap, every=6))
-    assert summary["frames"] == 10
-    assert summary["true_pass_1.5"] >= 0.8
-    assert summary["decoy_pass_1.5"] <= 0.2
+    summary = summarize_probe(probe(footage, geomap, every=4))
+    assert summary["frames"] == 15
+    # at the tracker's threshold (LocalizerConfig.track_min_excess)
+    assert summary["true_pass_2.0"] >= 0.8
+    assert summary["decoy_pass_2.0"] <= 0.15
     assert summary["calibration"]["mount_offset_deg"] == pytest.approx([0, 0], abs=0.5)
     # the simulated barometer reads 4% high
     assert summary["calibration"]["altitude_scale"] == pytest.approx(1 / 1.04, abs=0.02)

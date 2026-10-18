@@ -5,15 +5,17 @@ ground plane at the map's ground sample distance. After this step the only
 unknowns between the patch and the map are a 2D translation, the heading and
 a small scale error (from altitude bias), which is what the matcher searches.
 
-The patch is a disk centred on the ground point of the optical axis. Rotating
-the heading hypothesis only rotates the content about that centre, so the disk
-mask is identical for every heading and the correlator can share its
-normalization across hypotheses.
+The patch is centred on the ground point of the optical axis, so a heading
+hypothesis only turns its content about that centre. The matched template is
+either all the ground the image covers (:func:`frame_mask`, which turns with
+the heading) or the largest disk inside it, which is the same for every
+heading.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -64,10 +66,14 @@ def footprint(camera: Camera, altitude: float, pitch: float, roll: float) -> Foo
     return Footprint(center=center, radius=radius, outline=outline)
 
 
+@lru_cache(maxsize=32)
 def disk_mask(radius_px: int) -> np.ndarray:
+    """Pixels within ``radius_px`` of the centre of a (2r+1)^2 patch (shared: do not modify)."""
     n = 2 * radius_px + 1
     yy, xx = np.mgrid[:n, :n] - radius_px
-    return (xx * xx + yy * yy) <= radius_px * radius_px
+    mask = (xx * xx + yy * yy) <= radius_px * radius_px
+    mask.flags.writeable = False
+    return mask
 
 
 def frame_mask(fp: Footprint, heading: float, gsd: float, radius_px: int) -> np.ndarray:

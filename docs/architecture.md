@@ -75,11 +75,20 @@ These were chosen by measurement, not taste: on a fixed world flown under
 five appearances, the regional-mean step alone raised cold-start global
 top-1 accuracy from 82% to 91%.
 
-**A disk-shaped template.** The matched patch is a disk centred on the
-optical-axis ground point. Rotating the heading hypothesis only rotates the
-content inside the disk, so the mask is the same for every hypothesis and the
-correlator's normalization is computed once per frame. Each extra
-heading/scale hypothesis costs one forward and one inverse FFT.
+**Match all the ground the frame sees.** The patch is centred on the
+optical-axis ground point, so a heading hypothesis only turns its content.
+The template was once the largest disk inside the frame, which is the same
+for every heading; but a 16:9 frame then uses only its short side. At 80 m
+over the real river valley, the frame covers 2.3 times the ground of its
+disk, and the true location stood out from noise in 62% of frames instead of
+40%; at the stricter threshold this allows, chance peaks also passed less
+often. Coverage of that flight rose from 32% to 84% with no misleading frame.
+The frame's mask turns with the heading, so the correlator normalizes the
+same search image once per heading (three FFTs), and features are computed
+once per scale, heading-up, then turned (doubled-angle orientations turn by
+twice the heading; 0.999 correlation with features of a patch rendered at
+the heading). Each heading/scale hypothesis still costs one forward and one
+inverse FFT.
 
 **Global vs local search.** When lost, the matcher searches the whole map,
 or a prior region such as where dead reckoning puts a lost track, at half
