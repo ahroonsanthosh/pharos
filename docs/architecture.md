@@ -82,7 +82,7 @@ for every heading; but a 16:9 frame then uses only its short side. At 80 m
 over the real river valley, the frame covers 2.3 times the ground of its
 disk, and the true location stood out from noise in 62% of frames instead of
 40%; at the stricter threshold this allows, chance peaks also passed less
-often. Coverage of that flight rose from 32% to 84% with no misleading frame.
+often. Coverage of that flight rose from 32% to 73% with no misleading frame.
 The frame's mask turns with the heading, so the correlator normalizes the
 same search image once per heading (three FFTs), and features are computed
 once per scale, heading-up, then turned (doubled-angle orientations turn by
