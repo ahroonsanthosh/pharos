@@ -270,6 +270,15 @@ gentle tilted plane. On a steep simulated ramp seen 20 degrees off nadir the
 rectified patch correlates 0.98 with the map instead of 0.64. The simulator
 ray-traces frames over its terrain to match.
 
+Odometry needs the same, and more than expected: on a slope across the
+track the uphill side of a frame is closer and seems to move faster than
+the downhill side, which a plane reads as a turn, 1.2 degrees per 8 m step
+on a 0.5 slope. Over simulated hills that biased the tracked heading by 3.4
+degrees while every match was within 0.3, because the window trusts many
+odometry steps over a few match headings. Keypoint rays now meet the terrain
+around the aircraft, looked up where it is now (carried forward from the
+last pose at its speed), and the bias is gone (0.3 degrees).
+
 **Calibration once per camera.** What cannot be learned in flight is
 measured once on a flight with GNSS. `pharos sync` finds the offset between
 a separate camera's video and the autopilot log without GNSS: a wrong offset
@@ -285,10 +294,6 @@ misalignment and the effective field of view from confident matches.
   `match(frame, region, scale, height) -> list[Fix]`. Keep them in an
   optional extra so the core stays torch-free.
 * **IMU** rates or airspeed become more factors in `nav.window`.
-* **Terrain in odometry**: matches are rectified onto the terrain, but
-  odometry still projects keypoints onto a plane at the viewed ground's
-  height. Relief mostly cancels between two frames that see the same
-  ground; a banked camera seeing far across a valley would still gain.
 * **Terrain in the global search**: without a position there is no relief to
   rectify onto, only the height bins; candidates are refined over terrain.
 * **Large maps**: map features are precomputed in memory per pyramid level.
