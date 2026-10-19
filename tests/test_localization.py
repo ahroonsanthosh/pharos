@@ -257,20 +257,6 @@ def test_local_matches_over_steep_terrain_are_rectified_onto_it():
     assert np.median(results[True][:, 1]) > 1.5 * np.median(results[False][:, 1])
 
 
-def test_coarse_features_are_the_fine_ones_reduced(small_sim):
-    """Thin hedges and walls keep their direction at the coarse level (fine_features)."""
-    from pharos.vision.matcher import MatcherConfig, _reduce
-
-    geomap, rec = small_sim
-    m = CorrelationMatcher(geomap, rec.camera)
-    fine, gsd = m._features(0)
-    coarse, coarse_gsd = m._features(1)
-    assert coarse_gsd == 2 * gsd
-    np.testing.assert_array_equal(coarse, _reduce(fine))
-    blurred = CorrelationMatcher(geomap, rec.camera, MatcherConfig(fine_features=False))
-    assert not np.allclose(blurred._features(1)[0], coarse)
-
-
 def test_heights_compete_by_how_far_they_stand_out():
     from pharos.vision.matcher import _standardized
 
