@@ -4,20 +4,28 @@ Consecutive frames come from the same camera minutes or seconds apart, so
 ordinary feature matching works well between them (unlike frame-to-map
 matching across seasons and sensors). Matched keypoints are projected onto
 the ground with each frame's own altitude and camera tilt, and a rigid 2D
-motion is fitted in metres. The result drives the localizer's motion model:
-small search windows, heading changes without a compass, and coasting
-through stretches where nothing matches the map.
+motion is fitted in metres. Over uneven ground they are projected onto the
+terrain: on a slope across the track the uphill side is closer and seems to
+move faster than the downhill side, which a plane would read as a turn.
+The result drives the localizer's motion model: small search windows,
+heading changes without a compass, and coasting through stretches where
+nothing matches the map.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-from pharos.geometry import Camera, ground_to_image, image_to_ground_points
+from pharos.geometry import Camera, camera_rotation, ground_to_image, image_to_ground_points
 from pharos.types import Frame, Telemetry
+
+# The ground's height (m) above the plane ``altitude`` below the camera, at ground offsets
+# (right, forward) from the nadir point in the frame's heading-up frame: (N, 2) -> (N,).
+Relief = Callable[[np.ndarray], np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -34,6 +42,7 @@ class OdometryConfig:
     # alike, which a ground fit cannot tell from motion; altitude error scales distance.
     attitude_sigma_deg: float = 0.75  # the localizer scales this up if flights disagree
     relative_sigma: float = 0.1
+    terrain_relief: bool = True  # over uneven ground, project onto the terrain (see Relief)
 
 
 @dataclass(frozen=True)
@@ -64,17 +73,19 @@ class VisualOdometry:
     def reset(self) -> None:
         self._prev = None
 
-    def step(self, frame: Frame, altitude_scale: float = 1.0) -> Motion | None:
+    def step(
+        self, frame: Frame, altitude_scale: float = 1.0, relief: Relief | None = None
+    ) -> Motion | None:
         """Motion since the previous call, or None (first frame, too little overlap)."""
         features = self.features(frame.image)
-        prev, self._prev = self._prev, (*features, frame, altitude_scale)
+        prev, self._prev = self._prev, (*features, frame, altitude_scale, relief)
         if prev is None:
             return None
         pairs = self.correspondences(prev[:2], features)
         if pairs is None:
             return None
         tel_a, tel_b = prev[2].telemetry, frame.telemetry
-        return self.motion(*pairs, tel_a, tel_b, prev[3], altitude_scale)
+        return self.motion(*pairs, tel_a, tel_b, prev[3], altitude_scale, prev[4], relief)
 
     def features(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         """Keypoint pixel positions and descriptors of one frame."""
@@ -108,10 +119,12 @@ class VisualOdometry:
         tel_b: Telemetry,
         scale_a: float = 1.0,
         scale_b: float = 1.0,
+        relief_a: Relief | None = None,
+        relief_b: Relief | None = None,
     ) -> Motion | None:
         """Motion from frame ``a`` to ``b`` given matched pixels and each frame's telemetry."""
-        ground_a = self._to_ground(uv_a, tel_a, scale_a)
-        ground_b = self._to_ground(uv_b, tel_b, scale_b)
+        ground_a = self._to_ground(uv_a, tel_a, scale_a, relief_a)
+        ground_b = self._to_ground(uv_b, tel_b, scale_b, relief_b)
         ok = np.all(np.isfinite(ground_a), axis=1) & np.all(np.isfinite(ground_b), axis=1)
         if ok.sum() < self.cfg.min_inliers:
             return None
@@ -120,14 +133,34 @@ class VisualOdometry:
 
     # -- internals --------------------------------------------------------
 
-    def _to_ground(self, uv: np.ndarray, tel: Telemetry, altitude_scale: float) -> np.ndarray:
+    def _to_ground(
+        self, uv: np.ndarray, tel: Telemetry, altitude_scale: float, relief: Relief | None = None
+    ) -> np.ndarray:
         """Heading-up ground coordinates (right, forward) in metres, nadir at the origin."""
         altitude = tel.altitude * altitude_scale
         H = ground_to_image(self.camera, (0.0, 0.0, altitude), 0.0, tel.pitch, tel.roll)
         ground = image_to_ground_points(H, uv)
+        if relief is not None:
+            ground = self._onto_terrain(uv, tel, altitude, ground, relief)
         far = np.hypot(ground[:, 0], ground[:, 1]) > self.cfg.max_range * altitude
         ground[far] = np.nan
         return ground
+
+    def _onto_terrain(
+        self, uv: np.ndarray, tel: Telemetry, altitude: float, ground: np.ndarray, relief: Relief
+    ) -> np.ndarray:
+        """Where each pixel's ray meets the terrain, starting from where it meets the plane."""
+        rays = np.column_stack([uv, np.ones(len(uv))]) @ np.linalg.inv(self.camera.K).T
+        rays = rays @ camera_rotation(0.0, tel.pitch, tel.roll).T  # heading-up world
+        down = np.minimum(rays[:, 2], -1e-6)
+        hit = np.all(np.isfinite(ground), axis=1)
+        dz = np.zeros(len(uv))
+        for _ in range(6):  # damped fixed point: the ray's ground at the terrain's height
+            on = rays[hit, :2] * ((altitude - dz[hit]) / -down[hit])[:, None]
+            dz[hit] = 0.5 * dz[hit] + 0.5 * np.minimum(relief(on), altitude - 1.0)
+        out = ground.copy()
+        out[hit] = rays[hit, :2] * ((altitude - dz[hit]) / -down[hit])[:, None]
+        return out
 
     def _fit(
         self, src: np.ndarray, dst: np.ndarray, altitude: float, tilt: float = 0.0

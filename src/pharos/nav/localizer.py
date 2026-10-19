@@ -44,9 +44,10 @@ from pharos.vision.matcher import (
     Matcher,
     MatcherConfig,
     SearchRegion,
+    relief_at,
     view_height,
 )
-from pharos.vision.odometry import Motion, OdometryConfig, VisualOdometry
+from pharos.vision.odometry import Motion, OdometryConfig, Relief, VisualOdometry
 from pharos.vision.rectify import footprint
 
 
@@ -211,14 +212,17 @@ class Localizer:
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
         self._height = self._height_field(frame.telemetry)
-        frame = self._above_ground(frame)
+        belief = self._belief(frame.t) if self._height is not None else None
+        frame = self._above_ground(frame, belief)
         fix = None
         usable = usable_view(frame.telemetry, self.cfg)
         matchable = matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame)
         self._motion = None
         if self.odometry is not None:
             if usable:
-                self._motion = self._plausible(self.odometry.step(frame, self.scale), frame.t)
+                relief = self._relief(frame, belief)
+                motion = self.odometry.step(frame, self.scale, relief)
+                self._motion = self._plausible(motion, frame.t)
             else:
                 self.odometry.reset()
         if not matchable:
@@ -631,30 +635,49 @@ class Localizer:
 
         return height
 
-    def _above_ground(self, frame: Frame) -> Frame:
+    def _above_ground(self, frame: Frame, belief) -> Frame:
         """The frame with its height above the ground at the most likely position, if known."""
-        if self._height is None or (belief := self._belief()) is None:
+        if belief is None:
             return frame
-        xy, heading, sigma = belief
+        xy, heading, spread = belief
         tel = frame.telemetry
-        spread = min(sigma, self.cfg.max_search_m / self.cfg.search_sigmas)
         height = view_height(self._height, self.camera, tel, xy, heading, spread)
         if not height > 0:  # the belief would put it underground
             return frame
         return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
 
-    def _belief(self) -> tuple[np.ndarray, float, float] | None:
-        """Most likely position, heading and position sigma.
+    def _relief(self, frame: Frame, belief) -> Relief | None:
+        """The terrain around the most likely position, for odometry to project onto."""
+        tel = frame.telemetry
+        if belief is None or tel.above_takeoff or not self.cfg.odometry.terrain_relief:
+            return None
+        (xy, heading, spread), height = belief, self._height
+        turn = rot2(heading).T
 
-        From the track, its dead reckoning or the lead candidate.
+        def relief(local: np.ndarray) -> np.ndarray:
+            return relief_at(height, xy + local @ turn, tel.altitude, spread)
+
+        return relief
+
+    def _belief(self, t: float) -> tuple[np.ndarray, float, float] | None:
+        """Most likely position at ``t``, heading, and how far off it may be (m).
+
+        From the track, its dead reckoning or the lead candidate, carried forward
+        at its last speed: the terrain is looked up where the aircraft is now.
         """
+        cfg = self.cfg
         for w in (self.window, self.dead_reckoning):
             if w is not None:
-                return w.pose[:2], float(w.pose[2]), w.sigma()
-        if self.hypotheses:
+                a, b = w.nodes[-2:] if len(w.nodes) > 1 else w.nodes[-1:] * 2
+                speed = (b.pose[:2] - a.pose[:2]) / (b.t - a.t) if b.t > a.t else 0.0
+                xy, heading, sigma = b.pose[:2] + speed * (t - b.t), float(b.pose[2]), w.sigma()
+                break
+        else:
+            if not self.hypotheses:
+                return None
             lead = max(self.hypotheses, key=lambda h: h.mean_score)
-            return lead.xy, float(lead.filter.x[4]), lead.filter.pos_sigma
-        return None
+            xy, heading, sigma = lead.xy, float(lead.filter.x[4]), lead.filter.pos_sigma
+        return xy, heading, min(sigma, cfg.max_search_m / cfg.search_sigmas)
 
     def _rolling(self, frame: Frame) -> bool:
         """Tilted beyond the rolling limit while the tilt changes fast (entering a bank)."""

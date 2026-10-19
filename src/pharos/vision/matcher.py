@@ -404,6 +404,16 @@ def view_height(
     return float(h.mean()) if len(h) else float("nan")
 
 
+def relief_at(height: HeightField, xy: np.ndarray, base: float, spread: float) -> np.ndarray:
+    """The ground's height (m) at world positions ``(..., 2)`` above a plane ``base`` below
+    the aircraft, averaged over ``spread`` (the position's uncertainty); 0 where unknown."""
+    h = height(np.asarray(xy, float)[..., None, :] + spread * _AROUND)
+    known = h > 0
+    seen = known.sum(-1)
+    mean = np.where(known, h, 0.0).sum(-1) / np.maximum(seen, 1)
+    return np.where(seen > 0, base - mean, 0.0)
+
+
 def _selection(select, geomap: GeoMap, level: int, shape, origin, stride: int = 4) -> np.ndarray:
     """``select`` at every template offset (centre ``origin`` + offset, level pixels).
 
@@ -476,11 +486,7 @@ def _relief(
     m = max(int(np.ceil((n - 1) / step)) + 1, 2)
     k = np.linspace(0, n - 1, m)
     local = np.stack(np.meshgrid(fp.center[0] + (k - r) * gsd, fp.center[1] - (k - r) * gsd), -1)
-    world = np.asarray(center, float) + local @ rot2(heading).T
-    h = height(world[..., None, :] + spread * _AROUND)
-    known = h > 0
-    seen = known.sum(-1)
-    dz = np.where(seen > 0, base - np.where(known, h, 0.0).sum(-1) / np.maximum(seen, 1), 0.0)
+    dz = relief_at(height, np.asarray(center, float) + local @ rot2(heading).T, base, spread)
     if np.abs(dz).max() < 0.01 * base:
         return None
     index = (np.arange(n) * (m - 1) / (n - 1)).astype(np.float32)
