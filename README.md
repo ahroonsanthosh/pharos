@@ -111,8 +111,9 @@ format.
 
 ## Benchmark
 
-Fourteen scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight at
-180 m (`hills` at 120 m, `valley` at 110 m) over a 1.6 km × 1.6 km world,
+Seventeen scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight at
+180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s at
+110 m with a 16:9 camera) over a 1.6 km × 1.6 km world,
 localized at 2 Hz from a cold start (no initial position) against a summer
 reference map:
 
@@ -294,6 +295,14 @@ to about 6 m).
 * **ArduPilot logs nonsense at gimbal lock.** A servo mount pointing straight
   down logs roll −90, yaw −90 for a camera at roll 0, yaw 3. Those samples
   inherit roll and yaw.
+* **A compass rules out turning around.** Line-dominated ground matches
+  almost as well turned 180°, so the wide search used to propose every
+  candidate both ways. After a U-turn on flight 2 the track was lost, the
+  search around its dead-reckoned position proposed a candidate turned 150°
+  from the compass, it won the quick reacquisition near the lost track, and
+  the new track flew backwards, up to 900 m off with a sigma of tens of
+  metres. Turned-around candidates are now proposed only where the heading
+  is unknown.
 * **Ridges.** Along a straight field edge the correlation peak is a line;
   each match reports its peak's spread, and the estimator uses it.
 * **Sync is attitude, and so are banks.** 0.3 s of clock error gives every
@@ -315,8 +324,12 @@ to about 6 m).
   (flight 1 live coverage 70% to 62%, misleading 0.5% to 1.4%); a 12 m trust
   threshold (flight 2 misleading 6.3%); counting nearby matches as only
   partly correlated (more coverage, but look-alike runs back: flight 1
-  misleading 0.4% to 0.9%); and full confirmation for a place that
-  contradicted a coasting track (flight 2 live coverage 40% to 21%).
+  misleading 0.4% to 0.9%); full confirmation for a place that
+  contradicted a coasting track (flight 2 live coverage 40% to 21%); and
+  coarse search features reduced from the fine ones, so thin hedges and
+  drains keep their direction (within noise: the true place came first in
+  25% of whole-map searches over the simulated Irish uplands against 23%,
+  and 8 against 9 and 12 against 10 out of 25 on flight 2).
 
 ## Next steps
 
@@ -325,8 +338,13 @@ to about 6 m).
   a nadir footprint is symmetric, so half of those could be shared.
 * **More information per match.** Over flight 2's valley the true place
   still stands out in only 62% of frames. Stitching consecutive frames into a
-  longer template, or learned features behind the `Matcher` protocol, are the
-  next levers.
+  longer template did not help in simulation (no change over pasture, mixed
+  to worse over uplands); learned features behind the `Matcher` protocol are
+  the next lever.
+* **An Irish flight.** The Irish scenarios are simulated. The test that
+  counts is a real flight over Irish pasture or bog against a free map of
+  it, which in Ireland means surveying the area once yourself (see
+  [docs/data.md](docs/data.md)).
 * **Finer terrain.** Copernicus GLO-30 is a 30 m model: cliffs, buildings
   and tree lines are smoothed out of it. A national lidar model (`--dem`, often
   1 m) would capture them where a low flight sees them.
