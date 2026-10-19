@@ -158,8 +158,8 @@ ffmpeg -re -i flight.mp4 -c:v libx264 -tune zerolatency -f flv rtmp://localhost:
 
 ## Limits to know
 
-* Each frame is treated as flat ground. Strong relief within one view
-  (cliffs, steep valley sides) adds error.
+* Over terrain, each frame is projected through the elevation model, which
+  at 30 m is coarser than cliffs or buildings: those still add error.
 * Matching needs visible structure: roads, field edges, buildings, water.
   Over forest, open water or uniform snow it will report lost until
   structure returns.

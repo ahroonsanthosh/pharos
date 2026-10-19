@@ -1,7 +1,7 @@
 """Turn a scenario into a reference map and a simulated flight recording.
 
-Over hills, each frame is rendered as if the ground under the aircraft were
-flat at its own elevation there, and the aircraft reports its barometric
+Over hills, each frame is ray-traced onto the terrain (a valley side rising
+towards the camera looks larger), and the aircraft reports its barometric
 height above the takeoff point (the first point of the flight).
 """
 
@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from pharos.geomap import GeoMap
-from pharos.geometry import Camera, ground_to_image, wrap_angle
+from pharos.geometry import Camera, camera_rotation, ground_to_image, wrap_angle
 from pharos.recording import Recording
 from pharos.sim.appearance import render
 from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
@@ -45,7 +45,7 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     rng = np.random.default_rng(sc.seed + 3)
     sensors = _SensorModel(sc.telemetry, rng, truth, above)
     frames = [
-        Frame(g.t, render_frame(ground, camera, g, sc.camera, rng), sensors.read(i))
+        Frame(g.t, render_frame(ground, camera, g, sc.camera, rng, geomap.terrain), sensors.read(i))
         for i, g in enumerate(truth)
     ]
     return geomap, Recording(camera, frames, truth, takeoff)
@@ -68,18 +68,34 @@ def _over_terrain(
 
 
 def render_frame(
-    ground: GeoMap, camera: Camera, pose: GroundTruth, spec: CameraSpec, rng: np.random.Generator
+    ground: GeoMap,
+    camera: Camera,
+    pose: GroundTruth,
+    spec: CameraSpec,
+    rng: np.random.Generator,
+    terrain: Terrain | None = None,
 ) -> np.ndarray:
-    """What the camera sees from ``pose`` over the flat ground image, with sensor effects."""
-    H = ground_to_image(
-        camera, (pose.x, pose.y, pose.altitude), pose.heading, pose.pitch, pose.roll
-    )
+    """What the camera sees from ``pose`` over the ground image, with sensor effects.
+
+    ``pose.altitude`` is the height above the ground under the aircraft; without
+    ``terrain`` the ground is flat.
+    """
     # Pick a ground pyramid level no finer than the frame so the warp does not alias.
     frame_gsd = pose.altitude / camera.fx
     level = int(np.clip(np.floor(np.log2(frame_gsd / ground.gsd)), 0, 4)) if frame_gsd > 0 else 0
     src, g = _color_level(ground, level)
-    A = np.array([[g, 0.0, ground.origin_x], [0.0, -g, ground.origin_y], [0.0, 0.0, 1.0]])
-    img = cv2.warpPerspective(src, H @ A, (camera.width, camera.height), flags=cv2.INTER_LINEAR)
+    if terrain is None:
+        H = ground_to_image(
+            camera, (pose.x, pose.y, pose.altitude), pose.heading, pose.pitch, pose.roll
+        )
+        A = np.array([[g, 0.0, ground.origin_x], [0.0, -g, ground.origin_y], [0.0, 0.0, 1.0]])
+        size = (camera.width, camera.height)
+        img = cv2.warpPerspective(src, H @ A, size, flags=cv2.INTER_LINEAR)
+    else:
+        xy = _ground_seen(camera, pose, terrain)
+        u = ((xy[..., 0] - ground.origin_x) / g).astype(np.float32)
+        v = ((ground.origin_y - xy[..., 1]) / g).astype(np.float32)
+        img = cv2.remap(src, u, v, cv2.INTER_LINEAR)
 
     f = img.astype(np.float32) / 255.0
     if spec.blur > 0:
@@ -95,6 +111,31 @@ def render_frame(
     out = (np.clip(f, 0, 1) * 255 + 0.5).astype(np.uint8)
     ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, spec.jpeg_quality])
     return cv2.imdecode(buf, cv2.IMREAD_COLOR) if ok else out
+
+
+def _ground_seen(
+    camera: Camera, pose: GroundTruth, terrain: Terrain, step: int = 4, rounds: int = 12
+) -> np.ndarray:
+    """World (x, y) of the terrain each image pixel sees, by marching every ray.
+
+    Rays are traced on a grid ``step`` pixels apart and interpolated: the
+    terrain is smooth on that scale.
+    """
+    w, h = -(-camera.width // step), -(-camera.height // step)
+    uu, vv = np.meshgrid(step * np.arange(w) + (step - 1) / 2, step * np.arange(h) + (step - 1) / 2)
+    rays = np.stack([uu, vv, np.ones_like(uu)], -1) @ np.linalg.inv(camera.K).T
+    rays = rays @ camera_rotation(pose.heading, pose.pitch, pose.roll).T  # world directions
+    down = np.minimum(rays[..., 2], -1e-3)  # rays at or above the horizon: far away
+    origin = np.array([pose.x, pose.y])
+    top = float(terrain.at(origin)) + pose.altitude
+    z = np.full((h, w), top - pose.altitude)
+    for _ in range(rounds):  # damped fixed point: where the ray meets the ground's height
+        xy = origin + rays[..., :2] * ((top - z) / -down)[..., None]
+        z = 0.5 * z + 0.5 * np.minimum(terrain.at(xy), top - 1.0)
+    xy = origin + rays[..., :2] * ((top - z) / -down)[..., None]
+    size = (w * step, h * step)
+    full = np.stack([cv2.resize(xy[..., k], size, interpolation=cv2.INTER_LINEAR) for k in (0, 1)])
+    return np.moveaxis(full, 0, -1)[: camera.height, : camera.width]
 
 
 class _SensorModel:

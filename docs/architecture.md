@@ -256,6 +256,20 @@ against 77%). Over a steep slope a position error becomes a height error, so
 the terrain is averaged over the position's uncertainty: its sigma for
 odometry, a third of the search radius for a match.
 
+**Rectify onto the terrain.** Over uneven ground a frame is not a plane: a
+valley side rising towards the camera looks larger and shifts outwards
+(relief displacement), by its height over the aircraft's height above the
+ground, a third on a steep slope. Local searches therefore project every
+patch pixel through the terrain into the frame (`rectify` with `relief`)
+instead of through the plane under the patch centre, and the template mask
+follows what the frame actually shows. The relief is taken where the search
+is centred and averaged over its uncertainty (a third of the search radius),
+because relief finer than the position is known cannot be placed: for a
+tracked aircraft that is the terrain's own detail, for a wide search a
+gentle tilted plane. On a steep simulated ramp seen 20 degrees off nadir the
+rectified patch correlates 0.98 with the map instead of 0.64. The simulator
+ray-traces frames over its terrain to match.
+
 **Calibration once per camera.** What cannot be learned in flight is
 measured once on a flight with GNSS. `pharos sync` finds the offset between
 a separate camera's video and the autopilot log without GNSS: a wrong offset
@@ -271,10 +285,11 @@ misalignment and the effective field of view from confident matches.
   `match(frame, region, scale, height) -> list[Fix]`. Keep them in an
   optional extra so the core stays torch-free.
 * **IMU** rates or airspeed become more factors in `nav.window`.
-* **Terrain relief within a frame**: heights follow the terrain, but each
-  frame is still rectified as a plane. On steep slopes, or for a banked
-  camera seeing far across a valley, rectifying onto the DEM itself is the
-  next step (and rendering frames over it in the simulator, which today
-  draws each frame as flat ground at the elevation under the aircraft).
+* **Terrain in odometry**: matches are rectified onto the terrain, but
+  odometry still projects keypoints onto a plane at the viewed ground's
+  height. Relief mostly cancels between two frames that see the same
+  ground; a banked camera seeing far across a valley would still gain.
+* **Terrain in the global search**: without a position there is no relief to
+  rectify onto, only the height bins; candidates are refined over terrain.
 * **Large maps**: map features are precomputed in memory per pyramid level.
   A 10 km × 10 km map at 1 m needs tiling or a coarser global level.

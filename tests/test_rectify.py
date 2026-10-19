@@ -74,3 +74,50 @@ def test_frame_mask_covers_the_whole_image_and_turns_with_heading():
     rows, cols = np.nonzero(east_up)
     assert np.ptp(rows) > 1.6 * np.ptp(cols)  # flying east: wide north-south
     assert abs(int(north_up.sum()) - int(east_up.sum())) < 0.03 * north_up.sum()
+
+
+def test_rectifying_onto_the_terrain_undoes_its_relief():
+    from pharos.terrain import Terrain
+
+    ground = ground_map()
+    # The ground climbs eastwards 1 m in 2.5: across a frame's width, a third of its height.
+    xs = np.arange(0, 601, 10.0)
+    ramp = Terrain(np.tile(0.4 * xs, (len(xs), 1)).astype(np.float32), 10.0, 0.0, 600.0)
+    cam = Camera.from_fov(640, 480, 70)
+    pose = GroundTruth(0, 300.0, 300.0, 120.0, np.radians(37), np.radians(20), np.radians(-4))
+    frame = render_frame(ground, cam, pose, CLEAN, np.random.default_rng(0), ramp)
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    top = float(ramp.at([pose.x, pose.y])) + pose.altitude
+    fp = footprint(cam, pose.altitude, pose.pitch, pose.roll)
+    center = np.array([pose.x, pose.y]) + rot2(pose.heading) @ fp.center
+    for _ in range(3):  # the patch centre: where the optical axis meets the ramp
+        altitude = top - float(ramp.at(center))
+        fp = footprint(cam, altitude, pose.pitch, pose.roll)
+        center = np.array([pose.x, pose.y]) + rot2(pose.heading) @ fp.center
+    gsd, R = 1.0, 40
+    k = (np.arange(2 * R + 1) - R) * gsd
+    east, north = np.meshgrid(center[0] + k, center[1] - k)
+    relief = ramp.at(np.stack([east, north], -1)) - (top - altitude)
+
+    gm = GeoMap(cv2.pyrDown(ground.gray), 1.0, origin_x=0.25, origin_y=599.25)
+    u, v = np.round(gm.world_to_px(center)).astype(int)
+    ref = orientation_field(gm.gray[v - R : v + R + 1, u - R : u + R + 1], disk_mask(R))
+    cos = {}
+    for name, dz in (("plane", None), ("terrain", relief)):
+        args = (cam, altitude, pose.pitch, pose.roll, pose.heading, gsd, R, fp, dz)
+        a = orientation_field(rectify(frame, *args), disk_mask(R))
+        cos[name] = np.vdot(a, ref).real / (np.linalg.norm(a) * np.linalg.norm(ref))
+    assert cos["terrain"] > 0.8 > cos["plane"]
+
+
+def test_frames_over_level_terrain_render_as_over_a_plane():
+    from pharos.terrain import Terrain
+
+    ground = ground_map()
+    level = Terrain(np.full((3, 3), 250.0, np.float32), 300.0, 0.0, 600.0)
+    cam = Camera.from_fov(640, 480, 70)
+    pose = GroundTruth(0, 300.0, 300.0, 120.0, 1.0, np.radians(17), np.radians(6))
+    plane = render_frame(ground, cam, pose, CLEAN, np.random.default_rng(0))
+    traced = render_frame(ground, cam, pose, CLEAN, np.random.default_rng(0), level)
+    assert np.abs(plane.astype(int) - traced).mean() < 0.5

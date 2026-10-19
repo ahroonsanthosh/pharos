@@ -201,9 +201,44 @@ def test_heights_above_takeoff_become_heights_above_ground(hills_sim):
     for takeoff in (rec.takeoff, None):
         loc = Localizer(geomap, rec.camera, takeoff=takeoff)
         estimates = [loc.process(f) for f in rec.frames]
-        assert loc.takeoff_elevation == pytest.approx(elevation, abs=2.0)
+        # learned from matches over relief, which measure heights to a few percent
+        assert loc.takeoff_elevation == pytest.approx(elevation, abs=5.0)
         used = np.array([e["tel"].altitude for e in loc.log])
         corrected = np.array([not e["tel"].above_takeoff for e in loc.log])
         assert corrected.mean() > 0.6
-        assert np.abs(used - true)[corrected].max() < 6
+        # the height above the ground the camera looks at, against the truth under it
+        error = np.abs(used - true)[corrected]
+        assert np.median(error) < 4 and error.max() < 9
         assert evaluate(estimates, rec.truth)["misleading"] == 0
+
+
+def test_local_matches_over_steep_terrain_are_rectified_onto_it():
+    from pharos.sim.flight import simulate
+    from pharos.sim.scenario import Scenario
+    from pharos.sim.trajectory import TrajectorySpec
+    from pharos.sim.world import TerrainSpec, WorldSpec
+    from pharos.vision.matcher import MatcherConfig
+
+    sc = Scenario(
+        seed=48,
+        world=WorldSpec(size_m=700, villages=2, buildings_per_village=20),
+        terrain=TerrainSpec(relief_m=150, wavelength_m=350),
+        trajectory=TrajectorySpec(
+            duration_s=6, margin_m=200, altitude=100, follow_terrain=True, tilt_deg=20
+        ),
+    )
+    geomap, rec = simulate(sc)
+    takeoff = float(geomap.terrain.at(np.array(rec.takeoff)))
+    results = {}
+    for relief in (False, True):
+        matcher = CorrelationMatcher(geomap, rec.camera, MatcherConfig(terrain_relief=relief))
+        rows = []
+        for i in range(0, 12, 3):
+            frame, g = rec.frames[i], rec.truth[i]
+            height = geomap.terrain.height_above(takeoff + frame.telemetry.altitude)
+            region = SearchRegion((g.x + 6, g.y - 4), 20, g.heading, np.radians(4))
+            fix = matcher.match(frame, region, height=height)[0]
+            rows.append((np.hypot(fix.x - g.x, fix.y - g.y), fix.excess))
+        results[relief] = np.array(rows)
+    assert results[True][:, 0].max() < 3
+    assert np.median(results[True][:, 1]) > 1.5 * np.median(results[False][:, 1])
