@@ -89,6 +89,10 @@ class MatcherConfig:
     # for every heading. On real 16:9 video at 80 m the frame covers 2.3 times the ground,
     # and the true location stood out in 62% of frames instead of 40%.
     template: str = "frame"
+    # The coarse (global) level reduces features computed at the fine level, instead of
+    # computing them on a reduced image: hedges, drains and walls a few metres wide keep
+    # their direction at 2 m per pixel instead of blurring away.
+    fine_features: bool = True
 
 
 @dataclass
@@ -125,6 +129,9 @@ class CorrelationMatcher:
         self._sweeps = 0  # wide searches over uneven ground so far (they take turns at heights)
 
     def _compute_features(self, level: int) -> tuple[np.ndarray, float]:
+        if level > self.cfg.fine_level and self.cfg.fine_features:
+            field, gsd = self._features(level - 1)
+            return _reduce(field), 2 * gsd
         img, gsd = self.map.level(level)
         return orientation_field(img, None, self.cfg.features), gsd
 
@@ -302,7 +309,8 @@ class CorrelationMatcher:
         fps = {a: footprint(self.camera, a, tel.pitch, tel.roll) for a in altitudes}
         smallest = fps[min(altitudes)]  # inside every height's coverage
         whole = self.cfg.template == "frame"
-        made = self._templates(gray, frame, altitudes, fps, gsd, relief)
+        steps = level - self.cfg.fine_level if self.cfg.fine_features else 0
+        made = self._templates(gray, frame, altitudes, fps, gsd, relief, steps)
         if made is None:
             return None
         R, masks, upright, own_mask = made  # own_mask: not a plane's frame_mask
@@ -354,7 +362,7 @@ class CorrelationMatcher:
                     stack[hi, ai] = score
         return _Search(best, stack, best_idx, headings, altitudes, fps, (u0, v0), R, level)
 
-    def _templates(self, gray, frame, altitudes, fps, gsd, relief):
+    def _templates(self, gray, frame, altitudes, fps, gsd, relief, steps=0):
         """Heading-up templates of the frame: radius, mask and field per height, own mask.
 
         A heading only turns the patch about its centre, so features are computed once
@@ -381,14 +389,24 @@ class CorrelationMatcher:
             mask_up = mask_up & patch_in_frame(uv, self.camera)
             masks = dict.fromkeys(fps, mask_up)
         upright = {
-            a: orientation_field(
-                rectify(gray, self.camera, a, tel.pitch, tel.roll, 0.0, gsd, R, fp, dz),
-                masks[a],
-                self.cfg.features,
-            )
-            for a, fp in fps.items()
+            a: self._field(gray, tel, a, gsd, R, fp, masks[a], dz, steps) for a, fp in fps.items()
         }
         return R, masks, upright, dz is not None
+
+    def _field(self, gray, tel, altitude, gsd, r, fp, mask, dz=None, steps=0) -> np.ndarray:
+        """Orientation field of the frame rectified at ``gsd`` (radius ``r``), computed
+        ``steps`` pyramid levels finer and reduced, like the map's (fine_features)."""
+        if steps == 0 or dz is not None:
+            patch = rectify(gray, self.camera, altitude, tel.pitch, tel.roll, 0.0, gsd, r, fp, dz)
+            return orientation_field(patch, mask, self.cfg.features)
+        k = 2**steps
+        fine = (2 * r) * k + 1
+        patch = rectify(gray, self.camera, altitude, tel.pitch, tel.roll, 0.0, gsd / k, r * k, fp)
+        big = cv2.resize(mask.astype(np.uint8), (fine, fine), interpolation=cv2.INTER_NEAREST)
+        field = orientation_field(patch, big > 0, self.cfg.features)
+        for _ in range(steps):
+            field = _reduce(field)
+        return np.where(mask, field, 0).astype(np.complex64)
 
     def _to_world(self, res: _Search, r, c, heading: float, fp: Footprint):
         """Aircraft position for a template top-left offset ``(r, c)`` in the ROI.
@@ -488,6 +506,12 @@ def _standardized(score: np.ndarray, allowed: np.ndarray) -> np.ndarray:
         values = score[ok]
         out[ok] = (values - values.mean()) / max(float(values.std()), 1e-6)
     return out
+
+
+def _reduce(field: np.ndarray) -> np.ndarray:
+    """A complex field at half the resolution, sampled like an image pyramid level."""
+    parts = [cv2.pyrDown(np.ascontiguousarray(p)) for p in (field.real, field.imag)]
+    return (parts[0] + 1j * parts[1]).astype(np.complex64)
 
 
 def _turned_mask(mask: np.ndarray, heading: float) -> np.ndarray:

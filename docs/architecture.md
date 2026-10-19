@@ -94,7 +94,10 @@ inverse FFT.
 **Global vs local search.** When lost, the matcher searches the whole map,
 or a prior region such as where dead reckoning puts a lost track, at half
 resolution over all headings or around the expected heading, then refines
-the best candidates at full resolution. When tracking,
+the best candidates at full resolution. The half-resolution features are the
+full-resolution ones reduced, not features of a reduced image: hedges,
+drains and stone walls a few metres wide keep their direction at 2 m per
+pixel instead of blurring into the fields beside them. When tracking,
 it searches a window sized from the track's uncertainty, over a few headings
 around the prediction and three altitude-scale hypotheses.
 
@@ -253,7 +256,10 @@ scores higher by chance alone and otherwise the lowest height always won.
 And a search renders five heights, nearest the expected one first, the
 others in later searches in turn: a terrain-following barometer drifts from
 the height above ground, so the right one can be far from the expected one.
-The takeoff elevation comes from the terrain at the takeoff point (`--takeoff`, the
+With these and the coarse features above, over simulated Irish uplands (200 m
+of relief) the true place went from 11th to 50th among the global
+candidates of four test frames to first in three and third in one. The takeoff
+elevation comes from the terrain at the takeoff point (`--takeoff`, the
 first position of a log or video that starts on the ground, or MAVLink's
 home position); without one, the first confirmed track supplies it, each of
 its matches measuring the height above the ground it saw. Copernicus GLO-30
