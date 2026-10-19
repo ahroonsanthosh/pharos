@@ -24,6 +24,8 @@ class Look:
     white_balance: tuple[float, float, float] = (1.0, 1.0, 1.0)  # RGB gains
     haze: float = 0.0  # 0..1 veil towards the sky colour
     clouds: float = 0.0  # fraction of the scene under cloud
+    overcast: float = 0.0  # 0..1: diffuse light, so no shadows or sun-lit relief
+    pasture: float = 0.0  # tone differences between grass fields (grazing, silage cuts)
     noise: float = 0.01  # per-pixel Gaussian noise (0..1 scale)
     seed: int = 0  # look-specific variation (soil moisture, crop tone)
 
@@ -40,6 +42,8 @@ _COVER = {
         (0.55, 0.47, 0.38),
         (0.60, 0.55, 0.45),
         (0.22, 0.40, 0.18),
+        (0.40, 0.37, 0.27),
+        (0.80, 0.76, 0.62),
     ],
     "summer": [
         (0.50, 0.58, 0.32),
@@ -51,6 +55,8 @@ _COVER = {
         (0.60, 0.52, 0.40),
         (0.62, 0.57, 0.46),
         (0.17, 0.30, 0.14),
+        (0.42, 0.40, 0.27),
+        (0.84, 0.80, 0.66),
     ],
     "autumn": [
         (0.48, 0.52, 0.30),
@@ -62,6 +68,8 @@ _COVER = {
         (0.46, 0.38, 0.30),
         (0.55, 0.50, 0.41),
         (0.45, 0.34, 0.18),
+        (0.50, 0.36, 0.22),
+        (0.78, 0.74, 0.60),
     ],
     "winter": [
         (0.50, 0.50, 0.38),
@@ -73,6 +81,8 @@ _COVER = {
         (0.42, 0.36, 0.30),
         (0.52, 0.48, 0.40),
         (0.32, 0.29, 0.26),
+        (0.36, 0.31, 0.26),
+        (0.72, 0.69, 0.58),
     ],
     "snow": [
         (0.92, 0.92, 0.95),
@@ -84,6 +94,8 @@ _COVER = {
         (0.90, 0.90, 0.93),
         (0.88, 0.88, 0.91),
         (0.40, 0.40, 0.41),
+        (0.85, 0.85, 0.88),
+        (0.80, 0.80, 0.83),
     ],
 }
 
@@ -160,13 +172,30 @@ def render(world: World, look: Look) -> np.ndarray:
     moisture = fbm((h, w), rng, 120 * px, octaves=4)
     img *= (1.0 + (0.02 if snow else 0.07) * world.soil + 0.04 * moisture)[..., None]
 
-    # Trees: crown texture with sun-side highlights.
+    # Pasture: each grass field its own tone (grazing, silage cuts), some freshly mown.
+    if look.pasture > 0:
+        grass = cover == Cover.GRASS
+        n = len(world.parcel_kind)
+        tone = 1.0 + look.pasture * rng.standard_normal(n).astype(np.float32)
+        mown = rng.random(n) < 0.5 * look.pasture / 0.1
+        stripes = 1.0 + 0.05 * np.sign(np.sin(2 * np.pi * (u * 0.6 + v * 0.8) / (6 * px)))
+        field = tone[world.parcel] * np.where(mown[world.parcel], stripes, 1.0)
+        img *= np.where(grass, field, 1.0)[..., None]
+        del field, stripes
+
+    # Bog: heather and peat in patches.
+    bog = cover == Cover.BOG
+    if bog.any():
+        img *= np.where(bog, 0.88 + 0.12 * np.tanh(world.canopy), 1.0)[..., None]
+
+    # Trees: crown texture with sun-side highlights; under overcast skies, little of either.
     sun_az, sun_el = np.radians(look.sun_azimuth_deg), np.radians(look.sun_elevation_deg)
     sun_uv = np.array([np.sin(sun_az), -np.cos(sun_az)], np.float32)  # towards the sun, pixels
+    direct = 1.0 - look.overcast
     trees = np.isin(cover, [Cover.FOREST, Cover.HEDGE])
     gu = cv2.Sobel(world.canopy, cv2.CV_32F, 1, 0, ksize=3)
     gv = cv2.Sobel(world.canopy, cv2.CV_32F, 0, 1, ksize=3)
-    relief = (gu * sun_uv[0] + gv * sun_uv[1]) * (0.6 * np.cos(sun_el))
+    relief = (gu * sun_uv[0] + gv * sun_uv[1]) * (0.6 * np.cos(sun_el) * direct)
     crowns = 0.8 + 0.25 * np.tanh(world.canopy) + np.clip(relief, -0.35, 0.35)
     img *= np.where(trees, crowns, 1.0)[..., None]
     del gu, gv, relief, crowns
@@ -180,7 +209,7 @@ def render(world: World, look: Look) -> np.ndarray:
         halves = (np.array([c[0], c[1], mid_b, mid_a]), np.array([mid_a, mid_b, c[2], c[3]]))
         ridge = c[1] - c[0]
         normal = np.array([-ridge[1], ridge[0]]) / (np.linalg.norm(ridge) + 1e-9)
-        facing = float(normal @ sun_uv) * np.cos(sun_el)
+        facing = float(normal @ sun_uv) * np.cos(sun_el) * direct
         for half, sign in zip(halves, (-1.0, 1.0), strict=True):
             shade = 1.0 + 0.35 * sign * facing
             poly = np.round(half).astype(np.int32)
@@ -199,11 +228,12 @@ def render(world: World, look: Look) -> np.ndarray:
         shadow |= _sweep(cover == cls, away * min(height / tan_el, 60.0) * px)
     shadow[(roofs > 0) | trees] = 0
     shade = cv2.GaussianBlur(shadow.astype(np.float32), (0, 0), 0.7 * px)
-    img *= (1.0 - 0.55 * shade)[..., None]
+    img *= (1.0 - 0.55 * direct * shade)[..., None]
     del shadow, shade
 
     # Illumination, atmosphere, sensor response.
-    img *= look.exposure * (0.55 + 0.45 * np.sin(sun_el)) / (0.55 + 0.45 * np.sin(np.radians(60)))
+    sunlit = (0.55 + 0.45 * np.sin(sun_el)) / (0.55 + 0.45 * np.sin(np.radians(60)))
+    img *= look.exposure * (direct * sunlit + 1.0 - direct)  # overcast light: as at 60 deg
     img *= np.asarray(look.white_balance, np.float32)
     if look.clouds > 0:
         _add_clouds(img, rng, look.clouds, px, away)

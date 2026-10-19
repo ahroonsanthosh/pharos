@@ -28,6 +28,16 @@ ideal. 10 m imagery only works from several kilometres up.
 | **OpenAerialMap** | patchy, worldwide | varies | CC-BY 4.0 |
 | Copernicus **Sentinel-2** | worldwide | 10 m | free and open; only for high altitude |
 
+**Ireland** has no free high-resolution orthophoto: Tailte Éireann's aerial
+imagery (the Republic) is licensed, OSNI's (Northern Ireland) is sold apart
+from a 10 cm strip along the Northern Irish coast (OpenDataNI), and the EU's
+2 to 4 m Copernicus mosaic can only be viewed, not downloaded. Two free routes
+remain: map the area yourself with the drone (fly a survey grid once, with
+GNSS, and build an orthophoto with the free OpenDroneMap; pharos reads its
+GeoTIFF directly), or license the national imagery for the area you operate
+in. For terrain, Geological Survey Ireland publishes LiDAR elevation models
+(1 to 2 m, CC BY 4.0) where it has flown; pass one with `--dem`.
+
 Avoid Google, Bing and Esri basemap tiles. They are free to view, but their
 terms do not allow bulk download, offline caching or use as a navigation
 reference.

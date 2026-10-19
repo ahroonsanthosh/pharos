@@ -102,3 +102,25 @@ def test_over_hills_heights_are_reported_above_the_takeoff_point():
     assert above == pytest.approx([100, 120, 140])
     with pytest.raises(ValueError, match="fly higher"):
         _over_terrain([replace(g, altitude=50.0) for g in truth], ramp, TrajectorySpec())
+
+
+def test_irish_backdrops_bog_coast_and_flooding():
+    from pharos.sim.world import Cover
+
+    plain = generate_world(SPEC, 11)
+    irish = generate_world(replace(SPEC, bog_fraction=0.4, coast=0.3), 11)
+    land = irish.cover != Cover.WATER
+    assert 0.25 < np.mean(irish.cover == Cover.WATER) < 0.4  # the sea, plus a few drains
+    assert 0.25 < np.mean(irish.cover[land] == Cover.BOG) < 0.5
+    assert np.mean(plain.cover == Cover.BOG) == 0
+    flooded = apply_changes(plain, ChangeSpec(replant=0.0, flooded=0.5), 3)
+    assert np.mean(flooded.cover == Cover.WATER) > np.mean(plain.cover == Cover.WATER) + 0.05
+
+
+def test_overcast_light_casts_no_shadows():
+    world = generate_world(SPEC, 7)
+    sunny = render(world, Look(sun_elevation_deg=20)).astype(float)
+    grey = render(world, Look(sun_elevation_deg=20, overcast=1.0)).astype(float)
+    flat = render(world, Look(sun_elevation_deg=90, overcast=1.0)).astype(float)
+    # with no direct light the sun's position no longer matters
+    assert np.abs(grey - flat).mean() < 0.3 * np.abs(sunny - flat).mean()
