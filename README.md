@@ -1,14 +1,36 @@
 # Pharos
 
-Absolute visual localization for drones: match a downward camera feed against
-free satellite or aerial imagery to get position and heading **without GNSS**.
+[![ci](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg)](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml)
+
+**Drone navigation without GPS.** Pharos finds a drone's position and heading
+by matching its downward camera against free satellite or aerial imagery, so
+it keeps working when GNSS is jammed, spoofed or simply not there. It runs on
+a laptop CPU with no learned weights and no paid maps, and takes any video
+feed with MAVLink (ArduPilot, PX4) or DJI telemetry, live or recorded.
+
+It is built to fail safe: every position carries an honest uncertainty, and a
+position is reported as trusted only when independent evidence supports it.
+
+| Real flight (public data; GPS only to score) | Analysed after the flight | Live, in flight | Trusted but wrong |
+|---|---:|---:|---:|
+| Farmland survey, fixed-wing, 13 min | 93% | 67% | none |
+| River valley survey, fixed-wing, 15 min | 87% | 47% | 2 frames, just past 25 m |
+
+*Share of the flight with a trusted position within 25 m of GPS, from the
+video alone.* In simulation, 16 of 17 scenarios (from snow, dusk haze and
+spring clouds to Irish bog and 200 m uplands) never trust a wrong position.
+
+![Flight 1: pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
+
+*Flight 1 analysed after the flight: pharos's estimate from the video alone
+(blue trusted, orange coasting with its uncertainty) over the GPS track
+(green). Orthophoto: PNOA © Instituto Geográfico Nacional, CC BY 4.0.*
 
 Pharos is built to survive what changes between when the map was captured
 and when the drone flies over: arbitrary heading, season, sun angle and
-shadows, haze, altitude error, camera tilt, and land changes such as crop
-rotation, construction and felling. It runs on a CPU with no learned weights.
-A simulator generates realistic test flights so the full pipeline can be
-developed and benchmarked before any hardware exists.
+shadows, haze, altitude error, camera tilt, terrain, and land changes such as
+crop rotation, construction and felling. A simulator generates realistic test
+flights so every change is benchmarked before it meets hardware.
 
 ## Run it on a laptop
 
