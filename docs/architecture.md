@@ -94,7 +94,10 @@ inverse FFT.
 **Global vs local search.** When lost, the matcher searches the whole map,
 or a prior region such as where dead reckoning puts a lost track, at half
 resolution over all headings or around the expected heading, then refines
-the best candidates at full resolution. When tracking,
+the best candidates at full resolution. The half-resolution features are the
+full-resolution ones reduced, not features of a reduced image: hedges,
+drains and stone walls a few metres wide keep their direction at 2 m per
+pixel instead of blurring into the fields beside them. When tracking,
 it searches a window sized from the track's uncertainty, over a few headings
 around the prediction and three altitude-scale hypotheses.
 
@@ -238,11 +241,21 @@ heights above the ground: the aircraft's elevation (the takeoff's plus the
 reported height) minus the ground's where the camera looks. Odometry uses
 the height at the current position (track, dead reckoning or lead
 candidate). Matching uses it wherever the aircraft might be: a local search
-at its centre, a global search by rendering the frame for a few heights
-20% apart, nearest the expected one first, each scored only where the
-terrain puts the aircraft at that height. The coarse search finds the place
-with the height up to about 10% off, so 20% steps lose nothing, and places
-where the aircraft would be underground are never searched. The takeoff
+at its centre, a global search by rendering the frame for heights 20% apart,
+each scored only where the terrain puts the aircraft at that height. The
+coarse search finds the place with the height up to about 10% off, so 20%
+steps lose nothing, and places where the aircraft would be underground are
+never searched. Three details decide whether this finds anything over real
+relief. Each height's template covers all the ground the frame sees from
+that height, not the lowest height's smaller patch. Heights compete in how
+far they stand out from their own chance scores, because a smaller template
+scores higher by chance alone and otherwise the lowest height always won.
+And a search renders five heights, nearest the expected one first, the
+others in later searches in turn: a terrain-following barometer drifts from
+the height above ground, so the right one can be far from the expected one.
+With these and the coarse features above, over simulated Irish uplands (200 m
+of relief) the true place went from 11th to 50th among the global
+candidates of four test frames to first in three and third in one. The takeoff
 elevation comes from the terrain at the takeoff point (`--takeoff`, the
 first position of a log or video that starts on the ground, or MAVLink's
 home position); without one, the first confirmed track supplies it, each of
@@ -296,5 +309,6 @@ misalignment and the effective field of view from confident matches.
 * **IMU** rates or airspeed become more factors in `nav.window`.
 * **Terrain in the global search**: without a position there is no relief to
   rectify onto, only the height bins; candidates are refined over terrain.
+  Over steep uplands the global search is still the slowest step to a fix.
 * **Large maps**: map features are precomputed in memory per pyramid level.
   A 10 km × 10 km map at 1 m needs tiling or a coarser global level.
