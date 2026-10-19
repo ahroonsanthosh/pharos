@@ -30,6 +30,8 @@ class Cover(IntEnum):
     BARE = 6
     TRACK = 7
     HEDGE = 8
+    BOG = 9  # peat bog and moorland: heather, few edges
+    SAND = 10  # beaches
 
 
 class Parcel(IntEnum):
@@ -61,6 +63,10 @@ class WorldSpec:
     ponds: int = 3
     villages: int = 4
     buildings_per_village: int = 35
+    # Irish backdrops: bog and moorland over this share of the land (with a few
+    # straight drains), and sea over this share of the map behind a ragged coast.
+    bog_fraction: float = 0.0
+    coast: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,7 @@ class ChangeSpec:
     buildings_removed: float = 0.0
     buildings_added: int = 0
     forest_cleared: float = 0.0  # fraction of forest parcels felled
+    flooded: float = 0.0  # fraction of fields with standing water in their low corners
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,9 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
         elif u < spec.hedge_fraction + spec.track_fraction:
             cv2.polylines(cover, [facet], True, int(Cover.TRACK), max(int(2.5 * px), 1))
 
+    if spec.bog_fraction > 0:
+        _bog(cover, rng, spec.bog_fraction, px)
+
     if spec.river:
         _river(cover, rng, px)
     for _ in range(spec.ponds):
@@ -176,6 +186,11 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
     rows = np.column_stack(
         [rng.uniform(0, np.pi, n_parcels), rng.uniform(1.5, 4.0, n_parcels)]
     ).astype(np.float32)
+    if spec.coast > 0:
+        sea = _coast(cover, rng, spec.coast, px)
+        buildings = [
+            b for b in buildings if not sea[tuple(np.round(b.corners.mean(0)[::-1]).astype(int))]
+        ]
     return World(
         gsd=spec.gsd,
         cover=cover,
@@ -219,6 +234,12 @@ def apply_changes(world: World, spec: ChangeSpec, seed: int) -> World:
     felled = forests[rng.random(len(forests)) < spec.forest_cleared]
     if len(felled):
         cover[np.isin(world.parcel, felled) & (cover == Cover.FOREST)] = Cover.BARE
+
+    if spec.flooded > 0:
+        fields = rng.random(len(world.parcel_kind)) < spec.flooded
+        low = world.soil < np.quantile(world.soil, 0.35)  # hollows hold the water
+        wet = fields[world.parcel] & low & np.isin(cover, [Cover.GRASS, Cover.CROP])
+        cover[wet] = Cover.WATER
 
     keep = rng.random(len(world.buildings)) >= spec.buildings_removed
     buildings = [b for b, k in zip(world.buildings, keep, strict=True) if k]
@@ -302,6 +323,43 @@ def _parcels(shape, spacing_px: float, rng) -> tuple[np.ndarray, list[np.ndarray
         cv2.fillPoly(parcel, [poly], i)
         polys.append(poly)
     return parcel, polys
+
+
+def _bog(cover: np.ndarray, rng, fraction: float, px: float) -> None:
+    """Blanket bog over ``fraction`` of the land, fields and hedges gone, a few drains."""
+    land = ~np.isin(cover, [Cover.WATER])
+    field = fbm(cover.shape, rng, 500 * px, octaves=4)
+    bog = (field > np.quantile(field[land], 1.0 - fraction)) & land
+    cover[bog] = Cover.BOG
+    n = cover.shape[0]
+    for _ in range(int(6 * fraction * n / (100 * px)) + 1):  # straight drains, ~1.5 m wide
+        a = rng.uniform(0, np.pi)
+        c = rng.uniform(0, n, 2)
+        d = np.array([np.cos(a), np.sin(a)]) * rng.uniform(80, 300) * px
+        line = np.zeros(cover.shape, np.uint8)
+        cv2.line(
+            line,
+            tuple(np.round(c - d).astype(int)),
+            tuple(np.round(c + d).astype(int)),
+            1,
+            max(int(1.5 * px), 1),
+        )
+        cover[(line > 0) & bog] = Cover.WATER
+
+
+def _coast(cover: np.ndarray, rng, fraction: float, px: float) -> np.ndarray:
+    """Sea over ``fraction`` of the map behind a ragged coastline with a beach. The sea mask."""
+    h, w = cover.shape
+    a = rng.uniform(0, 2 * np.pi)
+    v, u = np.mgrid[:h, :w].astype(np.float32)
+    depth = (u - w / 2) * np.cos(a) + (v - h / 2) * np.sin(a)
+    depth += 60 * px * fbm(cover.shape, rng, 300 * px, octaves=5)  # headlands and bays
+    line = np.quantile(depth, 1.0 - fraction)
+    beach = (depth > line - 20 * px) & (depth <= line) & (rng.random() < 0.7)
+    cover[beach & ~np.isin(cover, [Cover.ROAD, Cover.BUILDING])] = Cover.SAND
+    sea = depth > line
+    cover[sea] = Cover.WATER
+    return sea
 
 
 def _major_road(n: int, rng) -> np.ndarray:

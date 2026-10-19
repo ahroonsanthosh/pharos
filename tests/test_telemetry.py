@@ -213,6 +213,8 @@ def test_dataflash_servo_mount_sees_the_bank(tmp_path):
     assert sample.gnss == pytest.approx((41.7005, -0.7))
     assert log.at(-4.0) is None and log.at(20.0) is None
     assert not tel.above_takeoff and log.takeoff is None  # airborne at the first fix
+    log.terrain_database = False  # barometric heights, for pharos's own terrain model
+    assert log.at(2.0).telemetry.altitude == pytest.approx(100.0) and log.above_takeoff
 
 
 def test_dataflash_barometric_heights_and_takeoff_point(tmp_path):

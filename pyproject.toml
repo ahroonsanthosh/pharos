@@ -1,18 +1,21 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "pharos"
-version = "0.2"
+version = "0.3"
 description = "Absolute visual localization of drone video against satellite imagery."
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
     "scipy>=1.11",
     "pyyaml>=6.0",
+    "pillow>=10.0",  # photo EXIF/XMP (footage)
 ]
 
 [project.optional-dependencies]

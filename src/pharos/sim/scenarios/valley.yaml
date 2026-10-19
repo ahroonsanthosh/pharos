@@ -1,0 +1,8 @@
+# Steep valleys, 200 m deep and 450 m apart, under a camera tilted 20 degrees
+# forward, 110 m above the ground: a valley side rising towards the camera
+# looks a third larger than the floor beside it. Local matches are rectified
+# onto the terrain instead of a plane.
+name: valley
+seed: 5
+terrain: {relief_m: 200, wavelength_m: 450}
+trajectory: {altitude: 110, follow_terrain: true, tilt_deg: 20}

@@ -1,0 +1,20 @@
+# Uplands: moorland and bog with conifer plantations, a third of them felled
+# since the map; 200 m of relief under a terrain-following flight, and low
+# cloud drifting through the view. A DJI-style camera at 110 m.
+name: ireland_uplands
+seed: 33
+world:
+  bog_fraction: 0.45
+  forest_fraction: 0.3
+  meadow_fraction: 0.5
+  parcel_spacing_m: 120
+  hedge_fraction: 0.2
+  track_fraction: 0.2
+  major_roads: 1
+  villages: 1
+  buildings_per_village: 8
+changes: {forest_cleared: 0.35}
+terrain: {relief_m: 200, wavelength_m: 900}
+flight_look: {season: spring, overcast: 0.5, clouds: 0.12, haze: 0.15, seed: 7}
+camera: {width: 640, height: 360, hfov_deg: 80}
+trajectory: {duration_s: 120, altitude: 110, speed: 10, follow_terrain: true}

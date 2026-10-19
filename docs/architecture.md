@@ -94,7 +94,10 @@ inverse FFT.
 **Global vs local search.** When lost, the matcher searches the whole map,
 or a prior region such as where dead reckoning puts a lost track, at half
 resolution over all headings or around the expected heading, then refines
-the best candidates at full resolution. When tracking,
+the best candidates at full resolution. The half-resolution features are the
+full-resolution ones reduced, not features of a reduced image: hedges,
+drains and stone walls a few metres wide keep their direction at 2 m per
+pixel instead of blurring into the fields beside them. When tracking,
 it searches a window sized from the track's uncertainty, over a few headings
 around the prediction and three altitude-scale hypotheses.
 
@@ -124,7 +127,10 @@ local searches, and confirms one only after it has covered at least 120 m of
 new ground, once stood out map-wide, and leads every rival over the frames
 both have seen. Candidates at the same spot with opposite headings count as
 rivals, because line-dominated scenes (survey grids) can match almost as well
-turned around. A wrong position reported as
+turned around. Turned-around candidates are only proposed where the search
+allows that heading: with a compass, or a lost track's heading, they are
+ruled out (on a real flight one won the search after a U-turn, and the
+reacquired track flew backwards, up to 900 m off). A wrong position reported as
 trustworthy is the worst failure mode, so the benchmark tracks the
 `confident_wrong` rate separately.
 
@@ -235,21 +241,62 @@ and over a hill closer: a terrain-following DJI survey read 46 to 112 m
 while holding 50 to 63 m above the ground. Telemetry marks such heights
 (`above_takeoff`), and over a map with terrain the localizer turns them into
 heights above the ground: the aircraft's elevation (the takeoff's plus the
-reported height) minus the ground's where the camera looks. Odometry uses
-the height at the current position (track, dead reckoning or lead
-candidate). Matching uses it wherever the aircraft might be: a local search
-at its centre, a global search by rendering the frame for a few heights
-20% apart, nearest the expected one first, each scored only where the
-terrain puts the aircraft at that height. The coarse search finds the place
-with the height up to about 10% off, so 20% steps lose nothing, and places
-where the aircraft would be underground are never searched. The takeoff
+reported height) minus the ground's where the camera looks. Odometry runs
+at the height at the current position (track, dead reckoning or lead
+candidate), and every other candidate scales its step by its own height:
+ground motion grows with the height, and a wrong lead over a hill would
+otherwise slow every other candidate down (on a real flight to a quarter of
+its speed, so the true one kept losing its matches). Matching uses it wherever the aircraft might be: a local search
+at its centre, a global search by rendering the frame for heights 20% apart,
+each scored only where the terrain puts the aircraft at that height. The
+coarse search finds the place with the height up to about 10% off, so 20%
+steps lose nothing, and places where the aircraft would be underground are
+never searched. Three details decide whether this finds anything over real
+relief. Each height's template covers all the ground the frame sees from
+that height, not the lowest height's smaller patch. Heights compete in how
+far they stand out from their own chance scores, because a smaller template
+scores higher by chance alone and otherwise the lowest height always won.
+And a search renders five heights, nearest the expected one first, the
+others in later searches in turn: a terrain-following barometer drifts from
+the height above ground, so the right one can be far from the expected one.
+With these and the coarse features above, over simulated Irish uplands (200 m
+of relief) the true place went from 11th to 50th among the global
+candidates of four test frames to first in three and third in one. The takeoff
 elevation comes from the terrain at the takeoff point (`--takeoff`, the
 first position of a log or video that starts on the ground, or MAVLink's
 home position); without one, the first confirmed track supplies it, each of
 its matches measuring the height above the ground it saw. Copernicus GLO-30
 is a surface model: over forest it gives the canopy top, which is what the
-camera sees. Heights the aircraft measured above the ground itself
-(rangefinder, ArduPilot's terrain database) are used as they are.
+camera sees. Heights the aircraft measured above the ground itself (a
+rangefinder) are used as they are. ArduPilot's terrain database is looked up
+at the autopilot's GNSS position, so pharos prefers the barometric height and
+its own lookup, which also covered more of a real flight (PinPoint 2: 90%
+against 77%). Over a steep slope a position error becomes a height error, so
+the terrain is averaged over the position's uncertainty: its sigma for
+odometry, a third of the search radius for a match.
+
+**Rectify onto the terrain.** Over uneven ground a frame is not a plane: a
+valley side rising towards the camera looks larger and shifts outwards
+(relief displacement), by its height over the aircraft's height above the
+ground, a third on a steep slope. Local searches therefore project every
+patch pixel through the terrain into the frame (`rectify` with `relief`)
+instead of through the plane under the patch centre, and the template mask
+follows what the frame actually shows. The relief is taken where the search
+is centred and averaged over its uncertainty (a third of the search radius),
+because relief finer than the position is known cannot be placed: for a
+tracked aircraft that is the terrain's own detail, for a wide search a
+gentle tilted plane. On a steep simulated ramp seen 20 degrees off nadir the
+rectified patch correlates 0.98 with the map instead of 0.64. The simulator
+ray-traces frames over its terrain to match.
+
+Odometry needs the same, and more than expected: on a slope across the
+track the uphill side of a frame is closer and seems to move faster than
+the downhill side, which a plane reads as a turn, 1.2 degrees per 8 m step
+on a 0.5 slope. Over simulated hills that biased the tracked heading by 3.4
+degrees while every match was within 0.3, because the window trusts many
+odometry steps over a few match headings. Keypoint rays now meet the terrain
+around the aircraft, looked up where it is now (carried forward from the
+last pose at its speed), and the bias is gone (0.3 degrees).
 
 **Calibration once per camera.** What cannot be learned in flight is
 measured once on a flight with GNSS. `pharos sync` finds the offset between
@@ -266,10 +313,8 @@ misalignment and the effective field of view from confident matches.
   `match(frame, region, scale, height) -> list[Fix]`. Keep them in an
   optional extra so the core stays torch-free.
 * **IMU** rates or airspeed become more factors in `nav.window`.
-* **Terrain relief within a frame**: heights follow the terrain, but each
-  frame is still rectified as a plane. On steep slopes, or for a banked
-  camera seeing far across a valley, rectifying onto the DEM itself is the
-  next step (and rendering frames over it in the simulator, which today
-  draws each frame as flat ground at the elevation under the aircraft).
+* **Terrain in the global search**: without a position there is no relief to
+  rectify onto, only the height bins; candidates are refined over terrain.
+  Over steep uplands the global search is still the slowest step to a fix.
 * **Large maps**: map features are precomputed in memory per pyramid level.
   A 10 km × 10 km map at 1 m needs tiling or a coarser global level.

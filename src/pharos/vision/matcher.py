@@ -26,7 +26,9 @@ from pharos.vision.rectify import (
     disk_mask,
     footprint,
     frame_mask,
+    frame_pixels,
     nadir_from_patch_center,
+    patch_in_frame,
     rectify,
 )
 
@@ -69,11 +71,15 @@ class MatcherConfig:
     fine_heading_step_deg: float = 2.0
     scales: tuple[float, ...] = (0.94, 1.0, 1.06)  # altitude-correction hypotheses
     # Over uneven ground the global search renders the frame for heights this ratio apart,
-    # each scored only where the terrain puts the aircraft at that height: the expected one
-    # and those nearest it, at most max_height_bins (places further off are not searched).
-    # The coarse search finds the place with the height up to about 10% off.
+    # each scored only where the terrain puts the aircraft at that height, max_height_bins
+    # at a time: the expected one and those nearest it first, the others in turn (when a
+    # terrain-following flight's barometer drifts from its height above ground, the right
+    # one can be far off). The coarse search finds the place with the height 10% off.
     height_step: float = 0.2
     max_height_bins: int = 5
+    # Local searches over uneven ground render the frame through the terrain, not onto the
+    # plane under its centre (relief averaged over the position's uncertainty).
+    terrain_relief: bool = True
     candidates: int = 5  # coarse candidates refined in a global search
     peak_separation_m: float = 40.0  # peaks closer than this are the same place
     sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
@@ -83,6 +89,10 @@ class MatcherConfig:
     # for every heading. On real 16:9 video at 80 m the frame covers 2.3 times the ground,
     # and the true location stood out in 62% of frames instead of 40%.
     template: str = "frame"
+    # The coarse (global) level reduces features computed at the fine level, instead of
+    # computing them on a reduced image: hedges, drains and walls a few metres wide keep
+    # their direction at 2 m per pixel instead of blurring away.
+    fine_features: bool = True
 
 
 @dataclass
@@ -116,8 +126,12 @@ class CorrelationMatcher:
         self.camera = camera
         self.cfg = cfg or MatcherConfig()
         self._features = cache(self._compute_features)
+        self._sweeps = 0  # wide searches over uneven ground so far (they take turns at heights)
 
     def _compute_features(self, level: int) -> tuple[np.ndarray, float]:
+        if level > self.cfg.fine_level and self.cfg.fine_features:
+            field, gsd = self._features(level - 1)
+            return _reduce(field), 2 * gsd
         img, gsd = self.map.level(level)
         return orientation_field(img, None, self.cfg.features), gsd
 
@@ -164,8 +178,11 @@ class CorrelationMatcher:
             heading = float(res.headings[hi])
             x, y = self._to_world(res, r, c, heading, res.footprints[altitudes[ai]])
             # Line-dominated scenes can match almost as well turned around, so the
-            # opposite heading is refined too and competes as a separate candidate.
-            for h in (heading, heading + np.pi):
+            # opposite heading is refined too and competes as a separate candidate, unless
+            # the region rules it out (a compass does: on a real flight a turned-around
+            # candidate won after a U-turn and the track flew backwards for minutes).
+            turned = heading + np.pi
+            for h in (heading, turned) if _allows(region, turned) else (heading,):
                 local = SearchRegion((x, y), 3 * gsd + 4.0, float(wrap_angle(h)), step)
                 fix = self._local(gray, frame, local, scale, height)
                 if fix is not None:
@@ -185,8 +202,23 @@ class CorrelationMatcher:
             if not base > 0:  # underground here
                 return None
         altitudes = tuple(base * scale * s for s in cfg.scales)
+        relief = None
+        if height is not None and cfg.terrain_relief and region.heading is not None:
+            spread = region.radius / 3
+
+            def relief(fp: Footprint, gsd: float, r: int) -> np.ndarray | None:
+                return _relief(height, region.center, region.heading, base, spread, fp, gsd, r)
+
         res = self._search(
-            gray, frame, cfg.fine_level, region.center, region.radius, headings, altitudes, True
+            gray,
+            frame,
+            cfg.fine_level,
+            region.center,
+            region.radius,
+            headings,
+            altitudes,
+            True,
+            relief=relief,
         )
         if res is None:
             return None
@@ -233,9 +265,13 @@ class CorrelationMatcher:
             return np.round(np.log(np.where(ok, h, expected) / expected) / step).astype(int), ok
 
         k, ok = bin_of(grid)
-        chosen = sorted(sorted(set(k[ok].tolist()), key=abs)[: cfg.max_height_bins])
-        if not chosen:
+        nearest = sorted(set(k[ok].tolist()), key=abs)
+        if not nearest:
             return (), None
+        turns = -(-len(nearest) // cfg.max_height_bins)
+        turn = self._sweeps % turns
+        self._sweeps += 1
+        chosen = sorted(nearest[turn * cfg.max_height_bins : (turn + 1) * cfg.max_height_bins])
         altitudes = tuple(float(expected * np.exp(step * b)) for b in chosen)
         lut = np.full(chosen[-1] - chosen[0] + 1, -1)
         lut[np.array(chosen) - chosen[0]] = np.arange(len(chosen))
@@ -248,12 +284,23 @@ class CorrelationMatcher:
         return altitudes, select
 
     def _search(
-        self, gray, frame, level, center, radius, headings, altitudes, keep, select=None
+        self,
+        gray,
+        frame,
+        level,
+        center,
+        radius,
+        headings,
+        altitudes,
+        keep,
+        select=None,
+        relief=None,
     ) -> _Search | None:
         """Score the frame rendered at each heading and height above ground over a region.
 
         ``select``, given the world positions of the template centres (where the camera
-        looks), says which height applies at each, -1 for none.
+        looks), says which height applies at each, -1 for none. ``relief(fp, gsd, r)`` gives
+        the terrain under the heading-up patch (see :func:`_relief`), or None for a plane.
         """
         if not altitudes:
             return None
@@ -262,10 +309,11 @@ class CorrelationMatcher:
         fps = {a: footprint(self.camera, a, tel.pitch, tel.roll) for a in altitudes}
         smallest = fps[min(altitudes)]  # inside every height's coverage
         whole = self.cfg.template == "frame"
-        reach = smallest.extent if whole else smallest.radius
-        R = int(min(reach, self.cfg.max_radius_m) / gsd)
-        if R < 8:
+        steps = level - self.cfg.fine_level if self.cfg.fine_features else 0
+        made = self._templates(gray, frame, altitudes, fps, gsd, relief, steps)
+        if made is None:
             return None
+        R, masks, upright, own_mask = made  # own_mask: not a plane's frame_mask
         mask_t = disk_mask(R)
 
         H, W = feat.shape
@@ -284,18 +332,6 @@ class CorrelationMatcher:
             return None
         corr = Correlator(roi, valid, mask_t, self.cfg.min_overlap)
 
-        # A heading only turns the patch about its centre, so features are computed once per
-        # height, heading-up, and turned for each heading hypothesis.
-        mask_up = frame_mask(smallest, 0.0, gsd, R) if whole else mask_t
-        upright = {
-            a: orientation_field(
-                rectify(gray, self.camera, a, tel.pitch, tel.roll, 0.0, gsd, R, fp),
-                mask_up,
-                self.cfg.features,
-            )
-            for a, fp in fps.items()
-        }
-
         # One score per template offset, maximized over all hypotheses.
         best = np.full((roi.shape[0] - 2 * R, roi.shape[1] - 2 * R), -1.0, np.float32)
         allowed = None
@@ -304,21 +340,73 @@ class CorrelationMatcher:
             allowed = [allowed == ai for ai in range(len(altitudes))]
         best_idx = np.zeros(best.shape, np.int32)
         stack = np.empty((len(headings), len(altitudes), *best.shape), np.float32) if keep else None
+        shared = len({id(m) for m in masks.values()}) == 1  # one mask for every height
         for hi, heading in enumerate(headings):
-            mask_h, corr_h = mask_t, corr
-            if whole:  # the covered ground turns with the heading, and so does its mask
-                mask_h = frame_mask(smallest, heading, gsd, R)
-                corr_h = corr.with_mask(mask_h)
+            corr_h = corr
             for ai, a in enumerate(altitudes):
+                if ai == 0 or not shared:
+                    if own_mask:
+                        corr_h = corr.with_mask(_turned_mask(masks[a], heading))
+                    elif whole:  # the covered ground turns with the heading, and so does its mask
+                        fp = smallest if shared else fps[a]
+                        corr_h = corr.with_mask(frame_mask(fp, heading, gsd, R))
                 score = corr_h.score(_turned(upright[a], heading))
                 if allowed is not None:
-                    score = np.where(allowed[ai], score, np.float32(-1.0))
+                    # Heights compete in how far they stand out from their own chance scores:
+                    # a lower height's smaller template scores higher by chance alone.
+                    score = _standardized(score, allowed[ai])
                 better = score > best
                 best[better] = score[better]
                 best_idx[better] = hi * len(altitudes) + ai
                 if stack is not None:
                     stack[hi, ai] = score
         return _Search(best, stack, best_idx, headings, altitudes, fps, (u0, v0), R, level)
+
+    def _templates(self, gray, frame, altitudes, fps, gsd, relief, steps=0):
+        """Heading-up templates of the frame: radius, mask and field per height, own mask.
+
+        A heading only turns the patch about its centre, so features are computed once
+        per height, heading-up, and turned for each heading hypothesis.
+        """
+        tel = frame.telemetry
+        smallest = fps[min(altitudes)]
+        whole = self.cfg.template == "frame"
+        # Heights far apart (a wide search over uneven ground) each use all they see; heights
+        # a few percent apart share the smallest one's coverage, which is inside the others'.
+        apart = whole and max(altitudes) > 1.15 * min(altitudes)
+        widest = fps[max(altitudes)] if apart else smallest
+        reach = widest.extent if whole else widest.radius
+        R = int(min(reach, self.cfg.max_radius_m) / gsd)
+        if R < 8:
+            return None
+        mask_up = frame_mask(smallest, 0.0, gsd, R) if whole else disk_mask(R)
+        masks = {a: frame_mask(fp, 0.0, gsd, R) if apart else mask_up for a, fp in fps.items()}
+        dz = relief(fps[altitudes[len(altitudes) // 2]], gsd, R) if relief is not None else None
+        if dz is not None:  # the frame covers what the terrain lets it see
+            uv = frame_pixels(
+                self.camera, min(altitudes), tel.pitch, tel.roll, 0.0, gsd, R, smallest, dz
+            )
+            mask_up = mask_up & patch_in_frame(uv, self.camera)
+            masks = dict.fromkeys(fps, mask_up)
+        upright = {
+            a: self._field(gray, tel, a, gsd, R, fp, masks[a], dz, steps) for a, fp in fps.items()
+        }
+        return R, masks, upright, dz is not None
+
+    def _field(self, gray, tel, altitude, gsd, r, fp, mask, dz=None, steps=0) -> np.ndarray:
+        """Orientation field of the frame rectified at ``gsd`` (radius ``r``), computed
+        ``steps`` pyramid levels finer and reduced, like the map's (fine_features)."""
+        if steps == 0 or dz is not None:
+            patch = rectify(gray, self.camera, altitude, tel.pitch, tel.roll, 0.0, gsd, r, fp, dz)
+            return orientation_field(patch, mask, self.cfg.features)
+        k = 2**steps
+        fine = (2 * r) * k + 1
+        patch = rectify(gray, self.camera, altitude, tel.pitch, tel.roll, 0.0, gsd / k, r * k, fp)
+        big = cv2.resize(mask.astype(np.uint8), (fine, fine), interpolation=cv2.INTER_NEAREST)
+        field = orientation_field(patch, big > 0, self.cfg.features)
+        for _ in range(steps):
+            field = _reduce(field)
+        return np.where(mask, field, 0).astype(np.complex64)
 
     def _to_world(self, res: _Search, r, c, heading: float, fp: Footprint):
         """Aircraft position for a template top-left offset ``(r, c)`` in the ROI.
@@ -365,6 +453,16 @@ def view_height(
     return float(h.mean()) if len(h) else float("nan")
 
 
+def relief_at(height: HeightField, xy: np.ndarray, base: float, spread: float) -> np.ndarray:
+    """The ground's height (m) at world positions ``(..., 2)`` above a plane ``base`` below
+    the aircraft, averaged over ``spread`` (the position's uncertainty); 0 where unknown."""
+    h = height(np.asarray(xy, float)[..., None, :] + spread * _AROUND)
+    known = h > 0
+    seen = known.sum(-1)
+    mean = np.where(known, h, 0.0).sum(-1) / np.maximum(seen, 1)
+    return np.where(seen > 0, base - mean, 0.0)
+
+
 def _selection(select, geomap: GeoMap, level: int, shape, origin, stride: int = 4) -> np.ndarray:
     """``select`` at every template offset (centre ``origin`` + offset, level pixels).
 
@@ -392,16 +490,80 @@ def _turned(field: np.ndarray, heading: float) -> np.ndarray:
     if heading == 0.0:
         return field
     n = field.shape[0]
-    r = (n - 1) / 2
-    c, s = np.cos(heading), np.sin(heading)
-    rot = np.array([[c, s], [-s, c]])  # new pixel offset -> heading-up pixel offset
-    M = np.column_stack([rot, r - rot @ np.array([r, r])])
-    flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
+    M, flags = _turn(n, heading), cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
     parts = [
         cv2.warpAffine(np.ascontiguousarray(p), M, (n, n), flags=flags)
         for p in (field.real, field.imag)
     ]
     return ((parts[0] + 1j * parts[1]) * np.exp(2j * heading)).astype(np.complex64)
+
+
+def _standardized(score: np.ndarray, allowed: np.ndarray) -> np.ndarray:
+    """Scores where ``allowed`` as standard deviations above their mean there; -inf elsewhere."""
+    out = np.full(score.shape, -np.inf, np.float32)
+    ok = allowed & (score > -1.0)
+    if ok.sum() > 1:
+        values = score[ok]
+        out[ok] = (values - values.mean()) / max(float(values.std()), 1e-6)
+    return out
+
+
+def _reduce(field: np.ndarray) -> np.ndarray:
+    """A complex field at half the resolution, sampled like an image pyramid level."""
+    parts = [cv2.pyrDown(np.ascontiguousarray(p)) for p in (field.real, field.imag)]
+    return (parts[0] + 1j * parts[1]).astype(np.complex64)
+
+
+def _turned_mask(mask: np.ndarray, heading: float) -> np.ndarray:
+    """A heading-up patch mask turned like :func:`_turned` turns its field."""
+    n = mask.shape[0]
+    flags = cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP
+    return cv2.warpAffine(mask.astype(np.uint8), _turn(n, heading), (n, n), flags=flags) > 0
+
+
+def _turn(n: int, heading: float) -> np.ndarray:
+    """Affine map from a turned patch's pixels to the heading-up patch's."""
+    r = (n - 1) / 2
+    c, s = np.cos(heading), np.sin(heading)
+    rot = np.array([[c, s], [-s, c]])  # new pixel offset -> heading-up pixel offset
+    return np.column_stack([rot, r - rot @ np.array([r, r])])
+
+
+def _relief(
+    height: HeightField,
+    center,
+    heading: float,
+    base: float,
+    spread: float,
+    fp: Footprint,
+    gsd: float,
+    r: int,
+    step: int = 8,
+) -> np.ndarray | None:
+    """The ground's height (m) above the plane under a heading-up patch's centre.
+
+    For an aircraft at ``center`` with ``heading``, ``base`` above that plane. The
+    terrain is averaged over ``spread`` (the position's uncertainty): relief finer
+    than that is not known where it lies. Sampled every ``step`` patch pixels and
+    interpolated; None where the ground is flat to 1% of the height.
+    """
+    n = 2 * r + 1
+    m = max(int(np.ceil((n - 1) / step)) + 1, 2)
+    k = np.linspace(0, n - 1, m)
+    local = np.stack(np.meshgrid(fp.center[0] + (k - r) * gsd, fp.center[1] - (k - r) * gsd), -1)
+    dz = relief_at(height, np.asarray(center, float) + local @ rot2(heading).T, base, spread)
+    if np.abs(dz).max() < 0.01 * base:
+        return None
+    index = (np.arange(n) * (m - 1) / (n - 1)).astype(np.float32)
+    mx, my = np.meshgrid(index, index)
+    return cv2.remap(dz.astype(np.float32), mx, my, cv2.INTER_LINEAR)
+
+
+def _allows(region: SearchRegion, heading: float) -> bool:
+    """Whether ``heading`` is within ``region``'s heading span."""
+    if region.heading is None or region.heading_span >= np.pi:
+        return True
+    return abs(float(wrap_angle(heading - region.heading))) <= region.heading_span
 
 
 def _heading_grid(center: float | None, span: float, step: float) -> np.ndarray:

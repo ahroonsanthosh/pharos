@@ -38,6 +38,19 @@ def test_global_search_with_unknown_heading(small_sim):
     assert np.hypot(best.x - g.x, best.y - g.y) < 10
 
 
+def test_global_search_turns_candidates_around_only_where_the_heading_allows(small_sim):
+    geomap, rec = small_sim
+    matcher = CorrelationMatcher(geomap, rec.camera)
+    frame, g = rec.frames[10], rec.truth[10]
+
+    def turned(region):
+        fixes = matcher.match(frame, region)
+        return [f for f in fixes if abs(np.angle(np.exp(1j * (f.heading - g.heading)))) > np.pi / 2]
+
+    assert turned(SearchRegion((g.x, g.y), 450))  # no heading: both ways compete
+    assert not turned(SearchRegion((g.x, g.y), 450, g.heading, np.radians(45)))  # a compass
+
+
 def test_localizer_tracks_flight(small_sim):
     geomap, rec = small_sim
     estimates = localize(geomap, rec)
@@ -201,9 +214,100 @@ def test_heights_above_takeoff_become_heights_above_ground(hills_sim):
     for takeoff in (rec.takeoff, None):
         loc = Localizer(geomap, rec.camera, takeoff=takeoff)
         estimates = [loc.process(f) for f in rec.frames]
-        assert loc.takeoff_elevation == pytest.approx(elevation, abs=2.0)
+        # learned from matches over relief, which measure heights to a few percent
+        assert loc.takeoff_elevation == pytest.approx(elevation, abs=5.0)
         used = np.array([e["tel"].altitude for e in loc.log])
         corrected = np.array([not e["tel"].above_takeoff for e in loc.log])
         assert corrected.mean() > 0.6
-        assert np.abs(used - true)[corrected].max() < 6
+        # the height above the ground the camera looks at, against the truth under it
+        error = np.abs(used - true)[corrected]
+        assert np.median(error) < 4 and error.max() < 9
         assert evaluate(estimates, rec.truth)["misleading"] == 0
+
+
+def test_local_matches_over_steep_terrain_are_rectified_onto_it():
+    from pharos.sim.flight import simulate
+    from pharos.sim.scenario import Scenario
+    from pharos.sim.trajectory import TrajectorySpec
+    from pharos.sim.world import TerrainSpec, WorldSpec
+    from pharos.vision.matcher import MatcherConfig
+
+    sc = Scenario(
+        seed=48,
+        world=WorldSpec(size_m=700, villages=2, buildings_per_village=20),
+        terrain=TerrainSpec(relief_m=150, wavelength_m=350),
+        trajectory=TrajectorySpec(
+            duration_s=6, margin_m=200, altitude=100, follow_terrain=True, tilt_deg=20
+        ),
+    )
+    geomap, rec = simulate(sc)
+    takeoff = float(geomap.terrain.at(np.array(rec.takeoff)))
+    results = {}
+    for relief in (False, True):
+        matcher = CorrelationMatcher(geomap, rec.camera, MatcherConfig(terrain_relief=relief))
+        rows = []
+        for i in range(0, 12, 3):
+            frame, g = rec.frames[i], rec.truth[i]
+            height = geomap.terrain.height_above(takeoff + frame.telemetry.altitude)
+            region = SearchRegion((g.x + 6, g.y - 4), 20, g.heading, np.radians(4))
+            fix = matcher.match(frame, region, height=height)[0]
+            rows.append((np.hypot(fix.x - g.x, fix.y - g.y), fix.excess))
+        results[relief] = np.array(rows)
+    assert results[True][:, 0].max() < 3
+    assert np.median(results[True][:, 1]) > 1.5 * np.median(results[False][:, 1])
+
+
+def test_coarse_features_are_the_fine_ones_reduced(small_sim):
+    """Thin hedges and walls keep their direction at the coarse level (fine_features)."""
+    from pharos.vision.matcher import MatcherConfig, _reduce
+
+    geomap, rec = small_sim
+    m = CorrelationMatcher(geomap, rec.camera)
+    fine, gsd = m._features(0)
+    coarse, coarse_gsd = m._features(1)
+    assert coarse_gsd == 2 * gsd
+    np.testing.assert_array_equal(coarse, _reduce(fine))
+    blurred = CorrelationMatcher(geomap, rec.camera, MatcherConfig(fine_features=False))
+    assert not np.allclose(blurred._features(1)[0], coarse)
+
+
+def test_heights_compete_by_how_far_they_stand_out():
+    from pharos.vision.matcher import _standardized
+
+    rng = np.random.default_rng(0)
+    low = rng.normal(0.4, 0.1, (50, 50)).astype(np.float32)  # small template: noisy, high
+    high = rng.normal(0.2, 0.03, (50, 50)).astype(np.float32)  # large template: steady
+    high[25, 25] = 0.35  # the true place, a clear outlier for its height
+    everywhere = np.ones((50, 50), bool)
+    assert low.max() > high.max()
+    assert _standardized(high, everywhere).max() > _standardized(low, everywhere).max()
+    assert np.isneginf(_standardized(low, ~everywhere)).all()
+
+
+def test_candidates_move_by_odometry_at_their_own_height(small_sim):
+    """Odometry runs at the lead's height above ground; a candidate over lower ground moved
+    further, by the ratio of the heights."""
+    from dataclasses import replace
+
+    from pharos.terrain import Terrain
+    from pharos.types import Fix, Telemetry
+    from pharos.vision.odometry import Motion
+
+    geomap, rec = small_sim
+    x0, y0, _, y1 = geomap.extent
+    ramp = np.array([[0.0, 100.0], [0.0, 100.0]], np.float32)  # rises 0.1 m per m eastwards
+    geomap = replace(geomap, terrain=Terrain(ramp, 1000.0, x0, y1))
+    loc = Localizer(geomap, rec.camera, takeoff=(x0, y0))
+    above = Telemetry(150.0, 0.0, above_takeoff=True)
+    for x, score in ((x0 + 100, 0.6), (x0 + 600, 0.4)):  # 140 and 90 m above the ground
+        loc._candidate(Fix(x, y0 + 300, 0.0, score, 0.5), 0.0, False)
+    loc._height = loc._height_field(above)
+    frame = loc._above_ground(replace(rec.frames[0], telemetry=above), loc._belief(0.0))
+    assert frame.telemetry.altitude == pytest.approx(140.0, abs=0.5)
+    loc._motion, loc._last_t = Motion(np.array([0.0, 10.0]), 0.0, 0.5, 0.01, 50, 1.0), 0.0
+    moved = []
+    for h in loc.hypotheses:
+        before = h.xy.copy()
+        loc._predict(h, replace(frame, t=0.5))
+        moved.append(float(np.hypot(*(h.xy - before))))
+    assert moved == pytest.approx([10.0, 10.0 * 90 / 140], abs=0.1)

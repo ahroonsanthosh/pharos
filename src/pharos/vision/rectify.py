@@ -5,6 +5,11 @@ ground plane at the map's ground sample distance. After this step the only
 unknowns between the patch and the map are a 2D translation, the heading and
 a small scale error (from altitude bias), which is what the matcher searches.
 
+Over uneven ground the plane is the one under the patch centre, and ``relief``
+gives the ground's height above it everywhere else: a valley side rising
+towards the camera looks larger and shifts outwards, and projecting through
+the terrain undoes that.
+
 The patch is centred on the ground point of the optical axis, so a heading
 hypothesis only turns its content about that centre. The matched template is
 either all the ground the image covers (:func:`frame_mask`, which turns with
@@ -20,7 +25,13 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-from pharos.geometry import Camera, ground_to_image, image_to_ground_points, rot2
+from pharos.geometry import (
+    Camera,
+    camera_rotation,
+    ground_to_image,
+    image_to_ground_points,
+    rot2,
+)
 
 
 @dataclass(frozen=True)
@@ -98,11 +109,15 @@ def rectify(
     gsd: float,
     radius_px: int,
     fp: Footprint,
+    relief: np.ndarray | None = None,
 ) -> np.ndarray:
     """North-up ground patch of size (2r+1)^2 centred on the optical-axis point.
 
     Patch pixel ``(u, v)`` is at ground offset ``rot2(heading) @ fp.center +
     ((u - r) * gsd, -(v - r) * gsd)`` (east, north) from the nadir point.
+    ``relief`` is the ground's height (m) above the plane ``altitude`` below the
+    camera at each patch pixel; patch pixels the frame does not show repeat its
+    edge (see :func:`patch_in_frame`).
     """
     r = radius_px
     off = rot2(heading) @ fp.center
@@ -111,15 +126,22 @@ def rectify(
 
     # Low-pass the frame first so downsampling onto the coarse patch grid does not alias.
     frame_gsd = np.hypot(altitude, np.linalg.norm(fp.center)) / camera.fx
-    img = gray
+    img, shrink = gray, 1.0
     while gsd / frame_gsd >= 2.0 and min(img.shape) > 32:
         img = cv2.pyrDown(img)
         H = np.diag([0.5, 0.5, 1.0]) @ H
+        shrink *= 0.5
         frame_gsd *= 2.0
     ratio = gsd / frame_gsd
     if ratio > 1.0:
         img = cv2.GaussianBlur(img, (0, 0), 0.5 * ratio)
     n = 2 * r + 1
+    if relief is not None:
+        uv = frame_pixels(camera, altitude, pitch, roll, heading, gsd, radius_px, fp, relief)
+        maps = (uv * shrink).astype(np.float32)
+        return cv2.remap(
+            img, maps[..., 0], maps[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
     return cv2.warpPerspective(
         img,
         H,
@@ -127,6 +149,42 @@ def rectify(
         flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
         borderMode=cv2.BORDER_REPLICATE,
     )
+
+
+def frame_pixels(
+    camera: Camera,
+    altitude: float,
+    pitch: float,
+    roll: float,
+    heading: float,
+    gsd: float,
+    radius_px: int,
+    fp: Footprint,
+    relief: np.ndarray,
+) -> np.ndarray:
+    """Frame pixel ``(u, v)`` showing each pixel of the patch :func:`rectify` renders.
+
+    The ground at a patch pixel is ``relief`` metres above the plane ``altitude``
+    below the camera. Ground behind the camera comes back as -1.
+    """
+    r, n = radius_px, 2 * radius_px + 1
+    off = rot2(heading) @ fp.center
+    k = (np.arange(n) - r) * gsd
+    ground = np.empty((n, n, 3))
+    ground[..., 0] = off[0] + k[None, :]
+    ground[..., 1] = off[1] - k[:, None]
+    ground[..., 2] = np.asarray(relief) - altitude  # relative to the camera
+    p = ground @ (camera.K @ camera_rotation(heading, pitch, roll).T).T
+    with np.errstate(divide="ignore", invalid="ignore"):
+        uv = p[..., :2] / p[..., 2:]
+    uv[p[..., 2] <= 1e-6] = -1.0
+    return uv
+
+
+def patch_in_frame(uv: np.ndarray, camera: Camera) -> np.ndarray:
+    """Which patch pixels the frame shows, given their :func:`frame_pixels`."""
+    u, v = uv[..., 0], uv[..., 1]
+    return (u >= 0) & (u <= camera.width - 1) & (v >= 0) & (v <= camera.height - 1)
 
 
 def nadir_from_patch_center(center_xy: np.ndarray, heading: float, fp: Footprint) -> np.ndarray:

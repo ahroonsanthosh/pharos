@@ -28,6 +28,16 @@ ideal. 10 m imagery only works from several kilometres up.
 | **OpenAerialMap** | patchy, worldwide | varies | CC-BY 4.0 |
 | Copernicus **Sentinel-2** | worldwide | 10 m | free and open; only for high altitude |
 
+**Ireland** has no free high-resolution orthophoto: Tailte Éireann's aerial
+imagery (the Republic) is licensed, OSNI's (Northern Ireland) is sold apart
+from a 10 cm strip along the Northern Irish coast (OpenDataNI), and the EU's
+2 to 4 m Copernicus mosaic can only be viewed, not downloaded. Two free routes
+remain: map the area yourself with the drone (fly a survey grid once, with
+GNSS, and build an orthophoto with the free OpenDroneMap; pharos reads its
+GeoTIFF directly), or license the national imagery for the area you operate
+in. For terrain, Geological Survey Ireland publishes LiDAR elevation models
+(1 to 2 m, CC BY 4.0) where it has flown; pass one with `--dem`.
+
 Avoid Google, Bing and Esri basemap tiles. They are free to view, but their
 terms do not allow bulk download, offline caching or use as a navigation
 reference.
@@ -114,10 +124,11 @@ recording format above is only needed for simulated flights.
   the telemetry when the recording starts on the ground (or MAVLink's home
   position), and otherwise learned from the first confirmed track. On two
   real flights this agreed with ArduPilot's own terrain database to a median
-  of 1 to 2 m. ArduPilot logs with the terrain database enabled give height
-  above terrain directly, looked up at the autopilot's GNSS position;
-  `--log-height home` uses the barometric height and pharos's terrain lookup
-  instead, which needs no GNSS.
+  of 1 to 2 m. From an ArduPilot log pharos takes the barometric height and
+  does its own terrain lookup, which needs no GNSS and covered more of a real
+  flight. `--log-height terrain` uses the autopilot's terrain database
+  instead (logged with `TERRAIN_ENABLE`, looked up at the autopilot's GNSS
+  position), which is also the fallback when pharos has no terrain.
 * **DJI specifics:** the `.SRT`'s `rel_alt` is height above takeoff even on
   terrain-following missions: on a real Mavic 3T survey it read 46 to 112 m
   while the drone held 50 to 63 m above the ground. With terrain, pharos

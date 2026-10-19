@@ -1,0 +1,23 @@
+# The west coast: blanket bog and rough grazing behind a ragged shoreline,
+# small stone-walled fields near the shore, one road. Autumn drizzle against a
+# summer map. A DJI-style camera at 110 m.
+name: ireland_bog_coast
+seed: 37
+world:
+  bog_fraction: 0.4
+  coast: 0.3
+  parcel_spacing_m: 70
+  meadow_fraction: 0.7
+  forest_fraction: 0.05
+  hedge_fraction: 0.3
+  track_fraction: 0.4
+  major_roads: 1
+  villages: 2
+  buildings_per_village: 10
+  river: false
+  ponds: 4
+terrain: {relief_m: 60, wavelength_m: 900}
+map_look: {pasture: 0.08, seed: 2}
+flight_look: {season: autumn, overcast: 0.7, haze: 0.25, contrast: 0.85, noise: 0.02, pasture: 0.1, seed: 6}
+camera: {width: 640, height: 360, hfov_deg: 80}
+trajectory: {duration_s: 120, altitude: 110, speed: 10}

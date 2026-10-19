@@ -170,11 +170,12 @@ class DataflashTelemetry:
     in the log: recording started ``sync_s`` seconds after the log's first 3D
     GNSS fix. Find it once per flight, for example from the takeoff moment.
 
-    Height above ground comes from the autopilot's terrain database
-    (``TERRAIN_ENABLE``, looked up at its own position estimate, so from GNSS)
-    when the log has it and ``terrain_database`` is set, else it is the
-    barometric height above home. The log's first GNSS fix is the takeoff
-    point if the aircraft was still on the ground then.
+    Heights are barometric, above home, unless ``terrain_database`` is set and
+    the log has the autopilot's terrain database (``TERRAIN_ENABLE``): height
+    above the ground, looked up at the autopilot's own position, so from GNSS.
+    Pharos's own terrain model needs no GNSS and did better on a real flight.
+    The log's first GNSS fix is the takeoff point if the aircraft was still on
+    the ground then.
 
     Camera attitude composes the airframe attitude (``ATT``) with the first
     mount (``MNT``): a servo mount (``MNT1_TYPE`` 1) logs body-frame servo
@@ -200,15 +201,20 @@ class DataflashTelemetry:
         self._att[:, 0] = series["ATT"][:, 0]
         self._att[:, 3] = np.unwrap(self._att[:, 3])
         terrain = series["TERR"][series["TERR"][:, 1] == _TERRAIN_OK]
-        self.above_takeoff = not (terrain_database and len(terrain))
-        self._height = series["POS"] if self.above_takeoff else terrain[:, [0, 2]]
-        home = series["POS"]
+        self._terrain = terrain[:, [0, 2]] if len(terrain) else None
+        self._home = home = series["POS"]
+        self.terrain_database = terrain_database  # may change before the first ``at``
         on_ground = abs(np.interp(gps[0, 0], home[:, 0], home[:, 1])) < ON_GROUND_M
         self.takeoff = (float(gps[0, 2]), float(gps[0, 3])) if on_ground else None
         mount = series["MNT"][~np.isnan(series["MNT"][:, 2])]
         self._mount = _mount_angles(mount[:, 0], np.radians(np.nan_to_num(mount[:, 1:])))
         self._mount_body_frame = params.get("MNT1_TYPE") == 1
         self.mount_pitch = mount_pitch
+
+    @property
+    def above_takeoff(self) -> bool:
+        """Whether heights are barometric: no terrain database wanted or logged."""
+        return not self.terrain_database or self._terrain is None
 
     def at(self, t: float) -> TelemetrySample | None:
         """Telemetry at video time ``t``; None outside the log."""
@@ -229,7 +235,8 @@ class DataflashTelemetry:
             else:
                 camera = rot_z(yaw + m_yaw) @ gimbal
         cam_yaw, tilt, side = camera_attitude(camera)
-        height = float(np.interp(when, self._height[:, 0], self._height[:, 1]))
+        heights = self._home if self.above_takeoff else self._terrain
+        height = float(np.interp(when, heights[:, 0], heights[:, 1]))
         gnss = None
         if self._gnss[0, 0] <= when <= self._gnss[-1, 0]:
             gnss = tuple(float(np.interp(when, self._gnss[:, 0], self._gnss[:, k])) for k in (1, 2))
