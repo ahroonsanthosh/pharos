@@ -388,13 +388,29 @@ class Localizer:
         m = self._motion
         before = h.xy
         if m is not None:
-            kf.predict_motion(dt, m.d_body, m.d_heading, m.sigma_m, m.sigma_heading)
+            k = self._own_scale(h, frame.telemetry)
+            kf.predict_motion(dt, k * m.d_body, m.d_heading, k * m.sigma_m, m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
         h.flown += float(np.hypot(*(h.xy - before)))
         if kf.pos_sigma > cfg.trust_sigma_m and h.trusted:
             h.trusted = False  # a wide search must be confirmed before it is trusted again
             h.streak, h.untrusted_since = 0, frame.t
+
+    def _own_scale(self, h: _Hypothesis, used: Telemetry) -> float:
+        """How much further ``h`` moved than odometry measured, at the height it flies.
+
+        Odometry runs once per frame, at the height above the ground where the
+        most likely position is (``used``). Ground motion grows with the height, so
+        a candidate over lower ground moved further. On a real flight a wrong lead
+        over high ground put every candidate at a quarter of its height above the
+        ground, and the true one, moving at a quarter of its speed, kept dying.
+        """
+        if self._height is None or used.above_takeoff:
+            return 1.0
+        spread = min(h.filter.pos_sigma, self.cfg.max_search_m / self.cfg.search_sigmas)
+        own = view_height(self._height, self.camera, used, h.xy, float(h.filter.x[4]), spread)
+        return own / used.altitude if own > 0 and used.altitude > 0 else 1.0
 
     def _measure(self, h: _Hypothesis, frame: Frame) -> Fix | None:
         cfg, kf = self.cfg, h.filter

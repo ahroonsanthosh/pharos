@@ -282,3 +282,32 @@ def test_heights_compete_by_how_far_they_stand_out():
     assert low.max() > high.max()
     assert _standardized(high, everywhere).max() > _standardized(low, everywhere).max()
     assert np.isneginf(_standardized(low, ~everywhere)).all()
+
+
+def test_candidates_move_by_odometry_at_their_own_height(small_sim):
+    """Odometry runs at the lead's height above ground; a candidate over lower ground moved
+    further, by the ratio of the heights."""
+    from dataclasses import replace
+
+    from pharos.terrain import Terrain
+    from pharos.types import Fix, Telemetry
+    from pharos.vision.odometry import Motion
+
+    geomap, rec = small_sim
+    x0, y0, _, y1 = geomap.extent
+    ramp = np.array([[0.0, 100.0], [0.0, 100.0]], np.float32)  # rises 0.1 m per m eastwards
+    geomap = replace(geomap, terrain=Terrain(ramp, 1000.0, x0, y1))
+    loc = Localizer(geomap, rec.camera, takeoff=(x0, y0))
+    above = Telemetry(150.0, 0.0, above_takeoff=True)
+    for x, score in ((x0 + 100, 0.6), (x0 + 600, 0.4)):  # 140 and 90 m above the ground
+        loc._candidate(Fix(x, y0 + 300, 0.0, score, 0.5), 0.0, False)
+    loc._height = loc._height_field(above)
+    frame = loc._above_ground(replace(rec.frames[0], telemetry=above), loc._belief(0.0))
+    assert frame.telemetry.altitude == pytest.approx(140.0, abs=0.5)
+    loc._motion, loc._last_t = Motion(np.array([0.0, 10.0]), 0.0, 0.5, 0.01, 50, 1.0), 0.0
+    moved = []
+    for h in loc.hypotheses:
+        before = h.xy.copy()
+        loc._predict(h, replace(frame, t=0.5))
+        moved.append(float(np.hypot(*(h.xy - before))))
+    assert moved == pytest.approx([10.0, 10.0 * 90 / 140], abs=0.1)
