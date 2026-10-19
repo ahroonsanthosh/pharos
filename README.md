@@ -303,6 +303,13 @@ to about 6 m).
   the new track flew backwards, up to 900 m off with a sigma of tens of
   metres. Turned-around candidates are now proposed only where the heading
   is unknown.
+* **Every candidate flies at its own height.** Odometry runs once per frame,
+  at the height above the ground under the most likely position. While
+  candidates compete that is the leading one, and on flight 2 a wrong lead
+  1.9 km away over higher ground put the aircraft 19 to 37 m above the
+  ground instead of about 80: the true candidate, moved at a quarter of its
+  speed, kept losing its matches. Each candidate's odometry now scales by
+  its own height above the ground.
 * **Ridges.** Along a straight field edge the correlation peak is a line;
   each match reports its peak's spread, and the estimator uses it.
 * **Sync is attitude, and so are banks.** 0.3 s of clock error gives every
@@ -325,11 +332,7 @@ to about 6 m).
   threshold (flight 2 misleading 6.3%); counting nearby matches as only
   partly correlated (more coverage, but look-alike runs back: flight 1
   misleading 0.4% to 0.9%); full confirmation for a place that
-  contradicted a coasting track (flight 2 live coverage 40% to 21%); and
-  coarse search features reduced from the fine ones, so thin hedges and
-  drains keep their direction (within noise: the true place came first in
-  25% of whole-map searches over the simulated Irish uplands against 23%,
-  and 8 against 9 and 12 against 10 out of 25 on flight 2).
+  contradicted a coasting track (flight 2 live coverage 40% to 21%).
 
 ## Next steps
 

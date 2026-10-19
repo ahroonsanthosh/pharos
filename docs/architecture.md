@@ -241,9 +241,12 @@ and over a hill closer: a terrain-following DJI survey read 46 to 112 m
 while holding 50 to 63 m above the ground. Telemetry marks such heights
 (`above_takeoff`), and over a map with terrain the localizer turns them into
 heights above the ground: the aircraft's elevation (the takeoff's plus the
-reported height) minus the ground's where the camera looks. Odometry uses
-the height at the current position (track, dead reckoning or lead
-candidate). Matching uses it wherever the aircraft might be: a local search
+reported height) minus the ground's where the camera looks. Odometry runs
+at the height at the current position (track, dead reckoning or lead
+candidate), and every other candidate scales its step by its own height:
+ground motion grows with the height, and a wrong lead over a hill would
+otherwise slow every other candidate down (on a real flight to a quarter of
+its speed, so the true one kept losing its matches). Matching uses it wherever the aircraft might be: a local search
 at its centre, a global search by rendering the frame for heights 20% apart,
 each scored only where the terrain puts the aircraft at that height. The
 coarse search finds the place with the height up to about 10% off, so 20%
