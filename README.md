@@ -417,3 +417,16 @@ docs/       laptop setup, architecture, data sources
 tests/
 Dockerfile  compose.yaml
 ```
+
+## License
+
+Copyright (C) 2026 Ahroon Santhosh.
+
+Pharos is free software under the [GNU Affero General Public License v3.0](LICENSE)
+(AGPL-3.0-only): you may use, study, change and share it, and if you
+distribute it, or let others use a changed version over a network, you must
+publish your source under the same licence. To build pharos into a
+proprietary product or service instead, a commercial licence is available
+from Heloria Labs: contact [@ahroonsanthosh](https://github.com/ahroonsanthosh).
+Outside contributions are accepted under a contributor licence agreement,
+so that both licences stay possible.
