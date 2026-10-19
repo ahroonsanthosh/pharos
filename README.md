@@ -120,20 +120,23 @@ reference map:
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | cover | mislead | gap s | in 3 sd | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.3 | 3.2 | 0.2 | 84% | 0.0% | 10 | 100% | 313 |
-| autumn_low_sun | 85% | 9.0 | 1.9 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 325 |
-| dusk_haze | 73% | 9.5 | 1.8 | 14.2 | 0.5 | 72% | 0.8% | 10 | 97% | 338 |
-| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 293 |
-| hills | 84% | 9.5 | 1.1 | 2.1 | 0.3 | 84% | 0.0% | 10 | 100% | 207 |
-| kitchen_sink | 48% | 31.5 | 1.7 | 3.5 | 0.3 | 48% | 0.0% | 32 | 100% | 313 |
-| land_change | 84% | 9.5 | 2.4 | 4.1 | 0.1 | 84% | 0.0% | 10 | 100% | 301 |
-| no_compass_spinning | 84% | 9.5 | 2.1 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 283 |
-| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 298 |
-| sensor_errors | 84% | 9.5 | 7.1 | 9.1 | 0.4 | 84% | 0.0% | 10 | 100% | 318 |
-| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.6 | 0.3 | 56% | 0.0% | 17 | 100% | 332 |
-| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 348 |
-| valley | 83% | 10.0 | 1.0 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 265 |
-| winter_snow | 86% | 8.5 | 1.5 | 3.0 | 0.1 | 86% | 0.0% | 8 | 100% | 260 |
+| altitude_bias | 84% | 9.5 | 1.3 | 3.2 | 0.2 | 84% | 0.0% | 10 | 100% | 701 |
+| autumn_low_sun | 85% | 9.0 | 1.9 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 797 |
+| dusk_haze | 73% | 9.5 | 1.8 | 14.2 | 0.5 | 72% | 0.8% | 10 | 97% | 858 |
+| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 673 |
+| hills | 84% | 9.5 | 1.1 | 2.0 | 0.3 | 84% | 0.0% | 10 | 100% | 501 |
+| ireland_bog_coast | 90% | 11.5 | 1.1 | 2.4 | 0.6 | 90% | 0.0% | 12 | 100% | 581 |
+| ireland_pasture | 90% | 11.5 | 1.1 | 2.9 | 0.4 | 90% | 0.0% | 12 | 100% | 425 |
+| ireland_uplands | 77% | 27.5 | 0.9 | 2.0 | 0.5 | 77% | 0.0% | 28 | 100% | 500 |
+| kitchen_sink | 48% | 31.5 | 1.8 | 3.5 | 0.3 | 48% | 0.0% | 32 | 100% | 699 |
+| land_change | 84% | 9.5 | 2.3 | 4.1 | 0.1 | 84% | 0.0% | 10 | 100% | 642 |
+| no_compass_spinning | 84% | 9.5 | 2.1 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 456 |
+| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 424 |
+| sensor_errors | 84% | 9.5 | 7.1 | 9.1 | 0.4 | 84% | 0.0% | 10 | 100% | 470 |
+| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.5 | 0.3 | 56% | 0.0% | 17 | 100% | 479 |
+| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 550 |
+| valley | 83% | 10.0 | 1.1 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 442 |
+| winter_snow | 86% | 8.5 | 1.5 | 3.0 | 0.1 | 86% | 0.0% | 8 | 100% | 315 |
 <!-- bench:end -->
 
 Columns: share of frames trusted (`tracking`), time to first confirmed
@@ -193,8 +196,8 @@ position against its own sigma.
 |---|---|---:|---:|---:|---:|---:|
 | PinPoint 1: farmland, ~105 m, 13 min | live | 67% | 0.0% | 100% | 93% | 100% |
 | | whole flight | 93% | 0.0% | 100% | 99% | 100% |
-| PinPoint 2: river valley, ~80 m, 15 min | live | 44% | 0.0% | 99% | 80% | 100% |
-| | whole flight | 78% | 0.0% | 100% | 95% | 100% |
+| PinPoint 2: river valley, ~80 m, 15 min | live | 47% | 0.1% | 99% | 82% | 99% |
+| | whole flight | 87% | 0.0% | 100% | 96% | 100% |
 | Aukerman: 77 photos, ~100 m | live | 22% | 0.0% | 100% | 39% | 100% |
 | | whole flight | 43% | 0.0% | 100% | 77% | 100% |
 
@@ -202,11 +205,12 @@ position against its own sigma.
 is `pharos analyze` on the recording, solved at once. Flight 2 was localized
 with the camera calibration from flight 1, out of sample.
 
-No frame is trusted and wrong, and reported uncertainties hold: 99% or more
-of positions, trusted or coasting, are within three sigmas of GNSS. Other
-runs of flight 2 have had a few borderline misleading frames (0.1 to 0.2%,
-25 to 30 m off with sigmas of 9 to 10 m: within three sigmas, but past the
-25 m line), with the autopilot's terrain database as well as with pharos's.
+Reported uncertainties hold: 99% or more of positions, trusted or coasting,
+are within three sigmas of GNSS. The only frames trusted and wrong are two
+borderline ones live on flight 2 (0.1%, 25.2 and 25.6 m off with sigmas of 9
+to 10 m: within three sigmas, but past the 25 m line); other runs of flight 2
+have had a few such frames (0.1 to 0.2%, 25 to 30 m off), with the
+autopilot's terrain database as well as with pharos's.
 
 Three changes got here. Making the uncertainty honest (dead reckoning,
 overlapping matches counted as one, the estimator fixes below) removed the
@@ -219,7 +223,11 @@ to 90% of the whole flight and 44 to 47% live, against 73 to 77% and 37 to
 40% in two runs with the autopilot's terrain database; flight 1 did not
 change. Flight 2's results vary by about ten points between runs that differ
 only in floating-point detail, because one acquisition more or less shifts a
-whole stretch, so single runs say little. Projecting matches and odometry
+whole stretch, so single runs say little. One such shift exposed a real
+fragility: a run covered only 31% of flight 2 (16% live) because a wrong
+leading candidate over higher ground set the height odometry used for every
+candidate; with each candidate at its own height the flight covers 87% (47%
+live). Projecting matches and odometry
 through the terrain, not a plane, changed no coverage beyond that on these
 flights, whose ground is mostly gentle (the median frame of flight 2 sees a
 3% change of scale across it, the steepest tenth 17%), but it made odometry
