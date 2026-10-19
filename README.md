@@ -173,6 +173,23 @@ the terrain, one at a constant altitude) covered 58%, 57% and 37% of frames
 with terrain heights against 42%, 45% and 37% without, none misleading, and
 dead reckoning came out of the gap 1 to 7 m off instead of 24 to 69 m.
 
+**Ireland.** Three scenarios model Irish ground and weather against a bright
+summer map, each flown at 110 m with a DJI-style 16:9 camera:
+`ireland_pasture` (small fields, nearly all grass and nearly all hedged, on a
+grey winter day, a quarter of them flooded and half grazed or cut
+differently since the map), `ireland_bog_coast` (blanket bog cut by drains,
+rough grazing and stone-walled fields behind a ragged shoreline, in autumn
+drizzle) and `ireland_uplands` (moor, bog and conifer plantation, a third
+felled since the map, 200 m of relief under a terrain-following flight, low
+cloud). Overcast light casts no shadows, so the hedges, walls, drains and
+shorelines carry the match. Flown over several generated worlds each, none
+of 14 flights trusted a wrong position and every reported uncertainty held:
+pasture covered 90% in all four worlds, bog and coast 67 to 90% (mean 84%;
+the 67% world coasted for a stretch), uplands 77 to 90% (mean 86%). The
+uplands are the hard case for the search without a position, over relief:
+there the previous search covered 60 to 90% (mean 82%), and its two
+hardest worlds rose from 60 and 72% to 77 and 80%.
+
 The simulator is still kinder than reality: the map and the drone view share
 exact geometry, and the localizer knows the very terrain the frames were
 rendered over, not a coarser model of it. Expect real cross-season match
