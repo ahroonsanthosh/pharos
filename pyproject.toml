@@ -13,6 +13,7 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "scipy>=1.11",
     "pyyaml>=6.0",
+    "pillow>=10.0",  # photo EXIF/XMP (footage)
 ]
 
 [project.optional-dependencies]
