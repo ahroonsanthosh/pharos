@@ -38,6 +38,19 @@ def test_global_search_with_unknown_heading(small_sim):
     assert np.hypot(best.x - g.x, best.y - g.y) < 10
 
 
+def test_global_search_turns_candidates_around_only_where_the_heading_allows(small_sim):
+    geomap, rec = small_sim
+    matcher = CorrelationMatcher(geomap, rec.camera)
+    frame, g = rec.frames[10], rec.truth[10]
+
+    def turned(region):
+        fixes = matcher.match(frame, region)
+        return [f for f in fixes if abs(np.angle(np.exp(1j * (f.heading - g.heading)))) > np.pi / 2]
+
+    assert turned(SearchRegion((g.x, g.y), 450))  # no heading: both ways compete
+    assert not turned(SearchRegion((g.x, g.y), 450, g.heading, np.radians(45)))  # a compass
+
+
 def test_localizer_tracks_flight(small_sim):
     geomap, rec = small_sim
     estimates = localize(geomap, rec)

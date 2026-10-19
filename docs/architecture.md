@@ -127,7 +127,10 @@ local searches, and confirms one only after it has covered at least 120 m of
 new ground, once stood out map-wide, and leads every rival over the frames
 both have seen. Candidates at the same spot with opposite headings count as
 rivals, because line-dominated scenes (survey grids) can match almost as well
-turned around. A wrong position reported as
+turned around. Turned-around candidates are only proposed where the search
+allows that heading: with a compass, or a lost track's heading, they are
+ruled out (on a real flight one won the search after a U-turn, and the
+reacquired track flew backwards, up to 900 m off). A wrong position reported as
 trustworthy is the worst failure mode, so the benchmark tracks the
 `confident_wrong` rate separately.
 

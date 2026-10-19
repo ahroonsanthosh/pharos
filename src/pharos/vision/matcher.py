@@ -178,8 +178,11 @@ class CorrelationMatcher:
             heading = float(res.headings[hi])
             x, y = self._to_world(res, r, c, heading, res.footprints[altitudes[ai]])
             # Line-dominated scenes can match almost as well turned around, so the
-            # opposite heading is refined too and competes as a separate candidate.
-            for h in (heading, heading + np.pi):
+            # opposite heading is refined too and competes as a separate candidate, unless
+            # the region rules it out (a compass does: on a real flight a turned-around
+            # candidate won after a U-turn and the track flew backwards for minutes).
+            turned = heading + np.pi
+            for h in (heading, turned) if _allows(region, turned) else (heading,):
                 local = SearchRegion((x, y), 3 * gsd + 4.0, float(wrap_angle(h)), step)
                 fix = self._local(gray, frame, local, scale, height)
                 if fix is not None:
@@ -554,6 +557,13 @@ def _relief(
     index = (np.arange(n) * (m - 1) / (n - 1)).astype(np.float32)
     mx, my = np.meshgrid(index, index)
     return cv2.remap(dz.astype(np.float32), mx, my, cv2.INTER_LINEAR)
+
+
+def _allows(region: SearchRegion, heading: float) -> bool:
+    """Whether ``heading`` is within ``region``'s heading span."""
+    if region.heading is None or region.heading_span >= np.pi:
+        return True
+    return abs(float(wrap_angle(heading - region.heading))) <= region.heading_span
 
 
 def _heading_grid(center: float | None, span: float, step: float) -> np.ndarray:
