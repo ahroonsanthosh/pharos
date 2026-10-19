@@ -108,10 +108,11 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--log-height",
-        choices=("terrain", "home"),
-        default="terrain",
-        help="ArduPilot heights: the autopilot's terrain database (looked up at its GNSS "
-        "position) if logged, or barometric height above home",
+        choices=("auto", "home", "terrain"),
+        default="auto",
+        help="ArduPilot heights: barometric above home, corrected with the terrain model "
+        "(home); the autopilot's terrain database, looked up at its GNSS position (terrain); "
+        "home if there is a terrain model, else terrain (auto)",
     )
     p.add_argument("--start", type=float, default=0.0, help="video: skip to this time, seconds")
     p.add_argument("--end", type=float, help="video: stop at this time, seconds")
@@ -157,24 +158,32 @@ def _load_footage_and_map(args):
     elif args.log:
         terrain_database = args.log_height == "terrain"
         telemetry = DataflashTelemetry(args.log, args.log_sync, terrain_database=terrain_database)
-    footage = load_footage(
-        args.footage,
-        hfov_deg=args.hfov,
-        altitude_m=args.altitude,
-        ground_m=args.ground,
-        telemetry=telemetry,
-        rate_hz=args.rate,
-        start_s=args.start,
-        end_s=args.end,
-        mount_offset_deg=tuple(args.mount_offset),
-    )
-    if args.takeoff:
-        footage.takeoff = tuple(args.takeoff)
+
+    def load():
+        footage = load_footage(
+            args.footage,
+            hfov_deg=args.hfov,
+            altitude_m=args.altitude,
+            ground_m=args.ground,
+            telemetry=telemetry,
+            rate_hz=args.rate,
+            start_s=args.start,
+            end_s=args.end,
+            mount_offset_deg=tuple(args.mount_offset),
+        )
+        if args.takeoff:
+            footage.takeoff = tuple(args.takeoff)
+        return footage
+
+    footage = load()
     geomap = GeoMap.open(args.map).resampled(args.map_gsd)
     if args.no_terrain:
         geomap.terrain = None
     elif any(t.above_takeoff for t in footage.telemetry) and (args.dem or not geomap.terrain):
         geomap.terrain = _terrain(geomap, args.dem, footage.takeoff)
+    if args.log and args.log_height == "auto" and geomap.terrain is None:
+        telemetry.terrain_database = True  # no terrain model: the autopilot's, if it logged one
+        footage = load()
     return footage, geomap
 
 
