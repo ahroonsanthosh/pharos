@@ -54,13 +54,14 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     drops = _raindrops(camera, sc.camera.raindrops, np.random.default_rng(sc.seed + 5))
     frames, kept, still = [], [], None
     for i, g in enumerate(truth):
-        tel = sensors.read(i)
-        if _within(g.t, sc.camera.dropped):
-            continue  # lost: no frame at all
-        if still is None or not _within(g.t, sc.camera.freezes):
+        lost = _within(g.t, sc.camera.dropped)
+        if not lost and (still is None or not _within(g.t, sc.camera.freezes)):
             still = render_frame(
                 ground, camera, g, sc.camera, rng, geomap.terrain, heights, texture, drops
             )
+        tel = sensors.read(i)  # after rendering, as the shared random draws always were
+        if lost:
+            continue  # no frame at all
         frames.append(Frame(g.t, still, tel))  # frozen video repeats its last image
         kept.append(g)
     return geomap, Recording(camera, frames, kept, takeoff)
