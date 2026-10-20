@@ -32,10 +32,14 @@ Relief = Callable[[np.ndarray], np.ndarray]
 class OdometryConfig:
     max_width: int = 800  # frames are downscaled to this for feature extraction
     features: int = 2000
-    # SIFT's contrast threshold. Its default (0.04) found no features at all in grey,
-    # hazy frames over moorland at 60 m (Irish overcast); at 0.01 every pair of frames
-    # gave a motion, and frames that had features moved as before.
-    contrast: float = 0.01
+    # SIFT's contrast threshold, and a lower one for frames with fewer than
+    # min_features at it. The default (0.04) found no features at all in grey, hazy
+    # frames over moorland at 60 m (Irish overcast); at 0.01 every pair of frames gave a
+    # motion. Used on every frame, the low threshold changed which features real video
+    # gave, and with them a whole flight's course (PinPoint 2: 87% covered to 63%).
+    contrast: float = 0.04
+    low_contrast: float = 0.01
+    min_features: int = 200
     ratio: float = 0.75  # Lowe ratio test
     ransac_px: float = 3.0  # inlier threshold in frame pixels at the ground...
     ransac_relief: float = 0.02  # ...or this fraction of altitude (trees, roofs: parallax)
@@ -73,6 +77,9 @@ class VisualOdometry:
         self._sift = cv2.SIFT_create(
             nfeatures=self.cfg.features, contrastThreshold=self.cfg.contrast
         )
+        self._faint = cv2.SIFT_create(
+            nfeatures=self.cfg.features, contrastThreshold=self.cfg.low_contrast
+        )
         self._matcher = cv2.BFMatcher(cv2.NORM_L2)
         self._prev: tuple[np.ndarray, np.ndarray, Frame, float] | None = None
 
@@ -100,6 +107,8 @@ class VisualOdometry:
         if f < 1.0:
             gray = cv2.resize(gray, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
         keypoints, desc = self._sift.detectAndCompute(gray, None)
+        if len(keypoints) < self.cfg.min_features:  # flat grey light: take fainter ones
+            keypoints, desc = self._faint.detectAndCompute(gray, None)
         # back to full-resolution pixel coordinates (pixel centres)
         uv = np.array([k.pt for k in keypoints], np.float64).reshape(-1, 2)
         return (uv + 0.5) / f - 0.5, desc
