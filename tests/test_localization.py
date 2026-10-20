@@ -311,3 +311,29 @@ def test_candidates_move_by_odometry_at_their_own_height(small_sim):
         loc._predict(h, replace(frame, t=0.5))
         moved.append(float(np.hypot(*(h.xy - before))))
     assert moved == pytest.approx([10.0, 10.0 * 90 / 140], abs=0.1)
+
+
+def test_a_flight_below_its_takeoff_point_is_still_flying(small_sim):
+    """Taken off on high ground, an aircraft reads less than nothing over the valley it is
+    50 m above; until it has left the ground, though, a low reading means on the ground."""
+    from dataclasses import replace
+
+    from pharos.nav.localizer import usable_view
+    from pharos.terrain import Terrain
+    from pharos.types import Telemetry
+
+    geomap, rec = small_sim
+    x0, y0, x1, y1 = geomap.extent
+    ramp = np.array([[0.0, 100.0], [0.0, 100.0]], np.float32)  # rises 0.1 m per m eastwards
+    geomap = replace(geomap, terrain=Terrain(ramp, 1000.0, x0, y1))
+    loc = Localizer(geomap, rec.camera, takeoff=(x1, y0))  # about 70 m up the slope
+
+    def seen(altitude):
+        tel = Telemetry(altitude, 0.0, above_takeoff=True)
+        loc._height = loc._height_field(tel)
+        return loc._above_ground(replace(rec.frames[0], telemetry=tel), None).telemetry
+
+    assert not usable_view(seen(0.5), loc.cfg)  # on the ground
+    assert seen(40.0).altitude == 40.0  # climbed: a usable height above takeoff stays
+    below = seen(-10.0)
+    assert usable_view(below, loc.cfg) and not below.above_takeoff and below.altitude > 15

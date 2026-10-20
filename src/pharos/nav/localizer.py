@@ -38,6 +38,7 @@ from pharos.geomap import GeoMap
 from pharos.geometry import Camera, rot2, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
 from pharos.nav.window import PoseWindow, WindowConfig
+from pharos.telemetry import ON_GROUND_M
 from pharos.types import Estimate, Fix, Frame, HeightField, Status, Telemetry
 from pharos.vision.matcher import (
     CorrelationMatcher,
@@ -197,6 +198,7 @@ class Localizer:
         self.window: PoseWindow | None = None
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self._lost_at = 0.0
+        self._airborne = False  # has left the ground (risen above takeoff)
         self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
@@ -652,15 +654,39 @@ class Localizer:
         return height
 
     def _above_ground(self, frame: Frame, belief) -> Frame:
-        """The frame with its height above the ground at the most likely position, if known."""
-        if belief is None:
-            return frame
-        xy, heading, spread = belief
+        """The frame with its height above the ground at the most likely position, if known.
+
+        With no position yet, a height above takeoff is kept, unless the aircraft has
+        left the ground and now reads too low to use: one that took off on a hill may
+        read 0 m over a valley while 60 m above it. It then takes the typical height
+        above the ground of where it may be.
+        """
         tel = frame.telemetry
+        if tel.above_takeoff and tel.altitude > ON_GROUND_M:
+            self._airborne = True
+        if belief is None:
+            low = tel.altitude < self.cfg.min_altitude_m
+            if self._height is None or not self._airborne or not low:
+                return frame
+            h = self._height(self._anywhere())
+            if not np.isfinite(h).any():  # underground wherever it may be
+                return frame
+            height = float(np.nanmedian(h))
+            return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+        xy, heading, spread = belief
         height = view_height(self._height, self.camera, tel, xy, heading, spread)
         if not height > 0:  # the belief would put it underground
             return frame
         return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+
+    def _anywhere(self) -> np.ndarray:
+        """Points spread over where the aircraft may be: the prior region, or the map."""
+        x0, y0, x1, y1 = self.map.extent
+        if (c := self.cfg.prior_center) is not None and np.isfinite(r := self.cfg.prior_radius_m):
+            x0, y0 = max(x0, c[0] - r), max(y0, c[1] - r)
+            x1, y1 = min(x1, c[0] + r), min(y1, c[1] + r)
+        gx, gy = np.meshgrid(np.linspace(x0, x1, 32), np.linspace(y0, y1, 32))
+        return np.stack([gx, gy], -1).reshape(-1, 2)
 
     def _relief(self, frame: Frame, belief) -> Relief | None:
         """The terrain around the most likely position, for odometry to project onto."""
