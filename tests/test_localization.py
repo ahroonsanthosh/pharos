@@ -263,12 +263,12 @@ def test_coarse_features_are_the_fine_ones_reduced(small_sim):
 
     geomap, rec = small_sim
     m = CorrelationMatcher(geomap, rec.camera)
-    fine, gsd = m._features(0)
-    coarse, coarse_gsd = m._features(1)
+    fine, gsd = m._features(0, False)
+    coarse, coarse_gsd = m._features(1, True)
     assert coarse_gsd == 2 * gsd
     np.testing.assert_array_equal(coarse, _reduce(fine))
     blurred = CorrelationMatcher(geomap, rec.camera, MatcherConfig(fine_features=False))
-    assert not np.allclose(blurred._features(1)[0], coarse)
+    assert not np.allclose(blurred._features(1, True)[0], coarse)
 
 
 def test_heights_compete_by_how_far_they_stand_out():
@@ -367,3 +367,16 @@ def test_a_known_start_survives_frames_without_odometry(small_sim):
     first = [loc.process(f) for f in rec.frames[:3]]
     assert all(e.status in (Status.TRACKING, Status.COASTING) for e in first)
     assert first[-1].sigma_xy < 50.0
+
+
+def test_low_frames_match_on_a_finer_map_level(small_sim):
+    """A frame from 40 m sees too little ground for a 1 m map; one from 170 m does not."""
+    from pharos.geomap import GeoMap
+    from pharos.vision.matcher import MatcherConfig
+
+    _, rec = small_sim
+    fine_map = GeoMap(np.zeros((400, 400, 3), np.uint8), 0.5)  # levels: 0.5, 1, 2 m
+    m = CorrelationMatcher(fine_map, rec.camera, MatcherConfig(fine_level=1, coarse_level=2))
+    frame = rec.frames[0]
+    assert m._levels(frame, 170.0) == (1, 2)
+    assert m._levels(frame, 40.0) == (0, 1)
