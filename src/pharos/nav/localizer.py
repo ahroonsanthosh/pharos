@@ -587,7 +587,7 @@ class Localizer:
         )
         fixes = self._match(frame, region)
         fix = fixes[0] if fixes else None
-        if not self._accepts(fix, 0.0 if h.trusted else cfg.untrusted_extra_excess):
+        if not self._accepts(fix, h.trusted, 0.0 if h.trusted else cfg.untrusted_extra_excess):
             fix = None
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
@@ -675,7 +675,7 @@ class Localizer:
             )
             fixes = self._match(frame, region)
             fix = fixes[0] if fixes else None
-            if not self._accepts(fix):
+            if not self._accepts(fix, self._trusted(w)):
                 fix = None
             if fix is not None:
                 w.attach(fix)
@@ -695,15 +695,20 @@ class Localizer:
         self.compass_offset, self.odometry_scale = w.compass_offset, w.scale
         return fix
 
-    def _accepts(self, fix: Fix | None, extra_excess: float = 0.0) -> bool:
-        """Whether a match stands out from its search window and scores well enough."""
+    def _accepts(self, fix: Fix | None, trusted: bool, extra_excess: float = 0.0) -> bool:
+        """Whether a match stands out from its search window and scores well enough.
+
+        Scoring well can make up for standing out less only around a trusted position: a
+        track coasting off its course searches around the wrong place, where such a match
+        is the nearest look-alike (on flight 2 one 69 m off was taken that way).
+        """
         cfg = self.cfg
         if fix is None:
             return False
         clear = fix.excess >= cfg.track_min_excess + extra_excess
         if fix.score >= cfg.track_min_score and clear:
             return True
-        strong = fix.score >= cfg.track_strong_score
+        strong = trusted and fix.score >= cfg.track_strong_score
         return strong and fix.excess >= cfg.track_low_excess + extra_excess
 
     def _trusted(self, w: PoseWindow) -> bool:
