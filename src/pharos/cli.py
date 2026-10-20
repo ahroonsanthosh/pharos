@@ -60,8 +60,10 @@ def main(argv: list[str] | None = None) -> None:
         "--known-start",
         type=float,
         metavar="SIGMA_M",
-        help="begin from the first frame's GNSS position, known to within SIGMA_M metres "
-        "(as from the last fix before jamming); GNSS is otherwise only used to score",
+        help="begin from the first GNSS fixes (position known to within SIGMA_M metres, "
+        "and velocity), as from the last ones before jamming; with heights above an "
+        "unknown takeoff, the speed also gives the height. GNSS is otherwise only used "
+        "to score",
     )
     p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("-o", "--out", type=Path, required=True)
