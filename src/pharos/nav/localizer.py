@@ -75,6 +75,12 @@ class LocalizerConfig:
     init_min_score: float = 0.25
     init_min_distinctiveness: float = 0.1  # a winner must once have stood out map-wide
     max_hypotheses: int = 4
+    # With every slot taken, a new candidate replaces the weakest one if that can no
+    # longer confirm (its mean score below init_min_score after confirm_frames frames).
+    evict_stale: bool = False
+    # A candidate the wide search finds again this many more times stands out map-wide
+    # even if no single search said so (0: only init_min_distinctiveness counts).
+    refound_distinct: int = 0
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
     # A lost track keeps dead reckoning. Acquisition then searches its 3-sigma region, and
@@ -148,6 +154,7 @@ class _Hypothesis:
     last_hit_xy: np.ndarray | None = None
     travelled: float = 0.0  # distance between matched positions, not dead reckoning
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
+    refound: int = 0  # times a later wide search found it again
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
     near_track: bool = False  # found where a lost track's dead reckoning puts the aircraft
     streak: int = 0  # consecutive matches
@@ -366,6 +373,7 @@ class Localizer:
             same = [h for h in self.hypotheses if self._same_place(h, f)]
             for h in same:
                 h.distinct = max(h.distinct, f.distinctiveness)
+                h.refound += 1
             if same or f.score < cfg.init_min_score:
                 continue
             self._candidate(f, frame.t, fast and bool(np.hypot(f.x - x, f.y - y) <= reach))
@@ -374,7 +382,14 @@ class Localizer:
         """Follow ``f`` (a match on the newest frame) as a candidate location."""
         cfg = self.cfg
         if len(self.hypotheses) >= cfg.max_hypotheses:
-            return
+            stale = [
+                h
+                for h in self.hypotheses
+                if len(h.scores) >= cfg.confirm_frames and h.mean_score < cfg.init_min_score
+            ]
+            if not (cfg.evict_stale and stale):
+                return
+            self.hypotheses.remove(min(stale, key=lambda h: h.mean_score))
         kf = PoseFilter(
             cfg.filter,
             f.x,
@@ -412,7 +427,10 @@ class Localizer:
             hits < needed
             or best.travelled < distance
             or best.mean_score < cfg.init_min_score
-            or best.distinct < cfg.init_min_distinctiveness
+            or not (
+                best.distinct >= cfg.init_min_distinctiveness
+                or 0 < cfg.refound_distinct <= best.refound
+            )
         ):
             return
         for other in self.hypotheses:
