@@ -39,7 +39,8 @@ def test_recorded_dji_flight(small_sim, tmp_path):
 
 
 def test_a_feed_can_start_from_the_first_gnss_fix(small_sim, tmp_path):
-    """From the first fix there is a position at once, and GNSS checked against it."""
+    """From the second fix (two give the velocity) there is a position, and GNSS is
+    checked against it."""
     geomap, rec = small_sim
     store = MapStore(tmp_path / "maps")
     store.add("test-area", geomap)
@@ -49,7 +50,7 @@ def test_a_feed_can_start_from_the_first_gnss_fix(small_sim, tmp_path):
     )
     feed = Feed("feed-gnss", spec, store)
     assert wait_for(feed) == "finished", feed.error
-    assert all(r["status"] in ("tracking", "coasting") for r in feed.records)
+    assert all(r["status"] in ("tracking", "coasting") for r in feed.records[1:])
     checks = {r.get("gnss_check") for r in feed.records if r["status"] == "tracking"}
     assert checks == {"agrees"}
 

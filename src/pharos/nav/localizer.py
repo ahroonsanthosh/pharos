@@ -249,20 +249,26 @@ class Localizer:
         sigma_m: float = 5.0,
         heading: float | None = None,
         heading_sigma_deg: float | None = None,
+        velocity: tuple[float, float] | None = None,
+        velocity_sigma: float = 2.0,
     ) -> None:
         """Begin from a known position at the next frame, e.g. the last GNSS fix before
-        jamming: ``xy`` in world coordinates, ``sigma_m`` how far off it may be.
+        jamming: ``xy`` in world coordinates, ``sigma_m`` how far off it may be, and the
+        ground ``velocity`` (east, north, m/s) it had, if known.
 
-        Without ``heading`` the compass gives it. Within reach of a local search the
+        Without ``heading`` the compass gives it. Without ``velocity`` the first step is
+        only bounded by the top speed: a fixed-wing starting in a bank, with no frame to
+        measure motion on, would otherwise seem to stand still. Within reach of a local search the
         track starts at once (reported as coasting until matches support it);
         otherwise, or with no heading at all, it starts as a lost track's dead
         reckoning, whose region the acquisition searches.
         """
-        self._start = (np.asarray(xy, float), float(sigma_m), heading, heading_sigma_deg)
+        speed = None if velocity is None else (*map(float, velocity), float(velocity_sigma))
+        self._start = (np.asarray(xy, float), float(sigma_m), heading, heading_sigma_deg, speed)
 
     def _begin(self, frame: Frame) -> None:
         cfg, tel = self.cfg, frame.telemetry
-        xy, sigma, heading, heading_sigma = self._start
+        xy, sigma, heading, heading_sigma, velocity = self._start
         self._start = None
         if heading is None and tel.yaw is not None:
             heading = float(wrap_angle(tel.yaw + self.compass_offset))
@@ -279,7 +285,7 @@ class Localizer:
             cov,
             self.compass_offset,
             self.odometry_scale,
-            speed_sigma=cfg.max_speed / 2,  # how fast it was going, nothing says yet
+            start_velocity=velocity or (0.0, 0.0, cfg.max_speed / 2),
         )
         self._started = (len(self.log) - 1, pose, cov)
         self.hypotheses, self._rejected, self._frames_in_state = [], [], 0

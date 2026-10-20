@@ -152,7 +152,7 @@ class Feed:
     def _loop(self, source: FrameSource, geomap: GeoMap) -> None:
         assert self.telemetry is not None
         localizer: Localizer | None = None
-        check, started = GnssCheck(), False
+        check, started, last_fix = GnssCheck(), False, None
         period = 1.0 / self.spec.rate_hz
         next_due = time.monotonic()
         while not self._stop.is_set():
@@ -184,8 +184,11 @@ class Feed:
                 localizer.set_takeoff(xy)
             gnss_xy = geomap.from_latlon(*sample.gnss) if sample.gnss is not None else None
             if self.spec.start_from_gnss and not started and gnss_xy is not None:
-                localizer.start_at(gnss_xy, check.gnss_sigma_m)
-                started = True
+                if last_fix is not None and t > last_fix[0]:  # two fixes give the velocity
+                    velocity = (np.asarray(gnss_xy) - last_fix[1]) / (t - last_fix[0])
+                    localizer.start_at(gnss_xy, check.gnss_sigma_m, velocity=tuple(velocity))
+                    started = True
+                last_fix = (t, np.asarray(gnss_xy))
             estimate = localizer.process(Frame(t, image, sample.telemetry))
             used = localizer.log[-1]["tel"]
             rec = record(estimate, sample.telemetry, sample.gnss, geomap, used)

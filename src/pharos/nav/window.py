@@ -109,13 +109,14 @@ class PoseWindow:
         cov: np.ndarray,
         compass_offset: float = 0.0,
         scale: float = 1.0,
-        speed_sigma: float | None = None,
+        start_velocity: tuple[float, float, float] | None = None,
     ):
-        """``speed_sigma`` (m/s) bounds the first step when nothing else says how fast the
-        aircraft was going (a track begun from a known position, not from matches)."""
+        """``start_velocity`` (east, north, sigma in m/s) is how fast the aircraft was going
+        at a track begun from a known position, not from matches: the last GNSS velocity,
+        or nothing known (0, 0, a fraction of the top speed)."""
         self.cfg = cfg
         self.nodes = [Node(t, tel, pose=np.asarray(pose, float).copy(), scale=scale)]
-        self.start = (t, speed_sigma)
+        self.start = (t, start_velocity)
         self.compass_offset = compass_offset
         # Joint prior on the oldest frames (x, y, heading, scale each) and the compass offset:
         # mean, whitener and the number of frames. Dropped frames leave it on the two oldest
@@ -371,12 +372,12 @@ class PoseWindow:
             w = _cauchy(np.abs(res_h), cfg.odometry_robust)
             b.block(res_h[:, None], np.stack([j + 2, i + 2], 1), Jh, w)
 
-        # a known start: its first step is no faster than the aircraft flies
-        t0, s0 = self.start
-        if s0 is not None and n >= 2 and t[0] == t0 and t[1] > t0:
-            q = 1.0 / (s0 * (t[1] - t0))
-            Js = np.concatenate([-np.eye(2), np.eye(2)], axis=1)[None] * q
-            step = ((F[1, :2] - F[0, :2]) * q)[None]
+        # a known start: its first step at the velocity it was known to have
+        t0, v0 = self.start
+        if v0 is not None and n >= 2 and t[0] == t0 and t[1] > t0:
+            dt, sv = t[1] - t0, v0[2]
+            Js = np.concatenate([-np.eye(2), np.eye(2)], axis=1)[None] / (sv * dt)
+            step = ((F[1, :2] - F[0, :2] - dt * np.array(v0[:2])) / (sv * dt))[None]
             b.block(step, np.array([[0, 1, col[1], col[1] + 1]]), Js)
 
         b.block(

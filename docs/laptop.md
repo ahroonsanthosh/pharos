@@ -116,8 +116,8 @@ drawn in green and gives you the accuracy of every flight.
 * **Video delay:** the video arrives later than the telemetry, typically 0.5
   to 1.5 s through a streaming pipeline. Set it once on a flight that has
   GPS: pick the value that minimizes *Error vs GNSS*.
-* **Start from the first GPS fix:** tick this when the aircraft has GPS at
-  takeoff and may lose it later. Pharos then begins from that fix instead of
+* **Start from GPS:** tick this when the aircraft has GPS at takeoff and may
+  lose it later. Pharos then begins from its position and velocity instead of
   searching the whole map, and never uses GPS again, so later jamming or
   spoofing cannot pull its position away.
 

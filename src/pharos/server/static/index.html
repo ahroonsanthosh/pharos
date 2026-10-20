@@ -108,7 +108,7 @@
             </div>
             <label>Video delay (s) <input name="video_delay_s" type="number" step="0.1" min="0" value="0"></label>
             <p class="hint">Stream latency, typically 0.5 to 1.5 s. Calibrate once on a flight with GPS: pick the value that minimizes "Error vs GNSS".</p>
-            <label class="check"><input name="start_from_gnss" type="checkbox"> Start from the first GPS fix</label>
+            <label class="check"><input name="start_from_gnss" type="checkbox"> Start from GPS</label>
             <p class="hint">Then GPS is never used again, so jamming or spoofing later cannot pull the position away. Either way, a GPS position that disagrees with a trusted visual one is flagged.</p>
           </div>
         </div>
