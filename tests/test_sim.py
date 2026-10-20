@@ -171,3 +171,43 @@ def test_fine_texture_shows_only_where_frames_resolve_it():
 
     assert detail(30.0, 0.1) > 4 * max(detail(30.0, 0.0), 0.5)  # 10 cm per pixel: grass shows
     assert detail(30.0, 0.1) > 2 * detail(150.0, 0.1)  # 50 cm per pixel: the image has it all
+
+
+def test_stress_effects_happen_where_asked():
+    """Frozen and lost video, stale telemetry, a pulled compass, a shifted map, tides."""
+    from pharos.sim.flight import simulate
+    from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
+
+    base = Scenario(
+        seed=5,
+        world=WorldSpec(size_m=700, villages=1, buildings_per_village=10),
+        trajectory=TrajectorySpec(duration_s=12, margin_m=170, altitude=150),
+        camera=CameraSpec(width=320, height=240),
+    )
+    _, plain = simulate(base)
+    sc = replace(
+        base,
+        camera=replace(base.camera, freezes=((2.0, 2.0),), dropped=((6.0, 1.5),)),
+        telemetry=TelemetrySpec(dropouts=((8.0, 2.0),), compass_jumps=((4.0, 2.0, 40.0),)),
+        map_shift_m=(7.0, -3.0),
+    )
+    geomap, rec = simulate(sc)
+    t = [f.t for f in rec.frames]
+    assert not any(6.0 <= x < 7.5 for x in t) and len(rec.truth) == len(rec.frames)
+    frozen = [f for f in rec.frames if 2.0 <= f.t < 4.0]
+    assert all(np.array_equal(f.image, frozen[0].image) for f in frozen)
+    stale = [f.telemetry for f in rec.frames if 7.5 <= f.t < 10.0]
+    assert all(s == stale[0] for s in stale)
+    pulled = {f.t: f.telemetry.yaw for f in rec.frames}
+    calm = {f.t: f.telemetry.yaw for f in plain.frames}
+    jump = np.degrees(np.angle(np.exp(1j * (pulled[4.5] - calm[4.5]))))
+    assert jump == pytest.approx(40.0, abs=5.0)
+    assert geomap.origin_x - simulate(base)[0].origin_x == pytest.approx(7.0)
+
+
+def test_tide_moves_the_shoreline():
+    w = generate_world(replace(SPEC, coast=0.3, size_m=400), 3)
+    sea = np.mean(w.cover == Cover.WATER)
+    high = apply_changes(w, ChangeSpec(replant=0.0, tide_m=10.0), 1)
+    low = apply_changes(w, ChangeSpec(replant=0.0, tide_m=-10.0), 1)
+    assert np.mean(low.cover == Cover.WATER) < sea < np.mean(high.cover == Cover.WATER)

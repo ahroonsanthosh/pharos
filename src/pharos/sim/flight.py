@@ -33,6 +33,8 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
 
     geomap = _satellite_map(render(world, sc.map_look), sc.world.gsd, k, sc.geo_origin)
     geomap.terrain = generate_terrain(sc.terrain, sc.world.size_m, sc.seed + 4)
+    dx, dy = sc.map_shift_m  # a map whose georeference is off: its image sits elsewhere
+    geomap.origin_x, geomap.origin_y = geomap.origin_x + dx, geomap.origin_y + dy
     today = apply_changes(world, sc.changes, sc.seed + 1)
     ground = _as_geomap(render(today, sc.flight_look), sc.world.gsd)
     heights = surface_height(today) if sc.world.object_heights else None
@@ -47,15 +49,39 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
             takeoff = (truth[0].x, truth[0].y)
     rng = np.random.default_rng(sc.seed + 3)
     sensors = _SensorModel(sc.telemetry, rng, truth, above)
-    frames = [
-        Frame(
-            g.t,
-            render_frame(ground, camera, g, sc.camera, rng, geomap.terrain, heights, texture),
-            sensors.read(i),
+    drops = _raindrops(camera, sc.camera.raindrops, np.random.default_rng(sc.seed + 5))
+    frames, kept, still = [], [], None
+    for i, g in enumerate(truth):
+        tel = sensors.read(i)
+        if _within(g.t, sc.camera.dropped):
+            continue  # lost: no frame at all
+        if still is None or not _within(g.t, sc.camera.freezes):
+            still = render_frame(
+                ground, camera, g, sc.camera, rng, geomap.terrain, heights, texture, drops
+            )
+        frames.append(Frame(g.t, still, tel))  # frozen video repeats its last image
+        kept.append(g)
+    return geomap, Recording(camera, frames, kept, takeoff)
+
+
+def _within(t: float, spans) -> bool:
+    """Whether ``t`` falls in one of the (start, duration, ...) spans."""
+    return any(a <= t < a + d for a, d, *_ in spans)
+
+
+def _raindrops(
+    camera: Camera, n: int, rng: np.random.Generator
+) -> list[tuple[float, float, float]]:
+    """Drops stuck on the lens: (column, row, radius) in pixels, the same in every frame."""
+    scale = min(camera.width, camera.height)
+    return [
+        (
+            rng.uniform(0, camera.width),
+            rng.uniform(0, camera.height),
+            rng.uniform(0.04, 0.1) * scale,
         )
-        for i, g in enumerate(truth)
+        for _ in range(n)
     ]
-    return geomap, Recording(camera, frames, truth, takeoff)
 
 
 def _over_terrain(
@@ -83,6 +109,7 @@ def render_frame(
     terrain: Terrain | None = None,
     heights: np.ndarray | None = None,
     texture: float = 0.0,
+    drops: list[tuple[float, float, float]] = (),
 ) -> np.ndarray:
     """What the camera sees from ``pose`` over the ground image, with sensor effects.
 
@@ -91,7 +118,8 @@ def render_frame(
     what stands on the ground is drawn as layers a metre or two apart: a low camera
     sees tree tops lean outwards and the sides of hedges and buildings (in shade).
     ``texture`` is the contrast of fine detail fixed to the ground (grass, gravel),
-    drawn where the frame resolves finer than the ground image.
+    drawn where the frame resolves finer than the ground image. ``drops`` blur and
+    brighten discs fixed in the image (raindrops on the lens).
     """
     # Pick a ground pyramid level no finer than the frame so the warp does not alias.
     frame_gsd = pose.altitude / camera.fx
@@ -143,6 +171,12 @@ def render_frame(
     f = img.astype(np.float32) / 255.0
     if xy is not None:
         f *= (1.0 + detail * _fine_texture(xy))[..., None]
+    if drops:
+        wet = np.zeros(f.shape[:2], np.float32)
+        for u, v, r in drops:
+            cv2.circle(wet, (round(u), round(v)), round(r), 1.0, -1, cv2.LINE_AA)
+        wet = cv2.GaussianBlur(wet, (0, 0), 3.0)[..., None]
+        f = (1 - wet) * f + wet * 1.1 * cv2.GaussianBlur(f, (0, 0), 9.0)
     if spec.blur > 0:
         f = cv2.GaussianBlur(f, (0, 0), spec.blur)
     if spec.motion_blur_px >= 1:
@@ -242,9 +276,17 @@ class _SensorModel:
         direction = rng.uniform(0, 2 * np.pi)
         bias = np.radians(spec.attitude_bias_deg)
         self.mount = (bias * np.cos(direction), bias * np.sin(direction))  # pitch, roll
+        self.last: Telemetry | None = None
 
     def read(self, i: int) -> Telemetry:
-        """What the aircraft reports alongside frame ``i``."""
+        """What the aircraft reports alongside frame ``i`` (in order: dropouts repeat)."""
+        t = self.truth[i].t
+        if self.last is not None and _within(t, self.spec.dropouts):
+            return self.last
+        self.last = self._measure(i)
+        return self.last
+
+    def _measure(self, i: int) -> Telemetry:
         s, rng = self.spec, self.rng
         t = self.truth[i].t
         j = min(range(len(self.truth)), key=lambda k: abs(self.truth[k].t - (t - s.latency_s)))
@@ -254,6 +296,7 @@ class _SensorModel:
         yaw = None
         if s.compass:
             err = self.compass_bias + self.drift_rate * t
+            err += sum(np.radians(deg) for a, d, deg in s.compass_jumps if a <= t < a + d)
             yaw = float(
                 wrap_angle(g.heading + err + rng.normal(0, np.radians(s.compass_noise_deg)))
             )

@@ -27,9 +27,14 @@ def from_dict(cls: type[T], data: Mapping[str, Any] | None) -> T:
         if kind is not None and isinstance(value, Mapping):
             value = from_dict(kind, value)
         elif isinstance(value, list):
-            value = tuple(value)
+            value = _tuples(value)
         kwargs[key] = value
     return cls(**kwargs)
+
+
+def _tuples(value):
+    """YAML lists as tuples, nested ones too, so frozen configs stay hashable."""
+    return tuple(_tuples(v) for v in value) if isinstance(value, list) else value
 
 
 def _dataclass_in(hint):

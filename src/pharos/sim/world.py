@@ -92,6 +92,7 @@ class ChangeSpec:
     buildings_added: int = 0
     forest_cleared: float = 0.0  # fraction of forest parcels felled
     flooded: float = 0.0  # fraction of fields with standing water in their low corners
+    tide_m: float = 0.0  # the shoreline moved this far inland (out to sea if negative)
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,16 @@ def apply_changes(world: World, spec: ChangeSpec, seed: int) -> World:
         low = world.soil < np.quantile(world.soil, 0.35)  # hollows hold the water
         wet = fields[world.parcel] & low & np.isin(cover, [Cover.GRASS, Cover.CROP])
         cover[wet] = Cover.WATER
+
+    if spec.tide_m != 0 and (cover == Cover.WATER).any():
+        sea = (cover == Cover.WATER).astype(np.uint8)
+        land = cv2.distanceTransform(1 - sea, cv2.DIST_L2, 5) * world.gsd  # metres to water
+        water = cv2.distanceTransform(sea, cv2.DIST_L2, 5) * world.gsd  # metres to land
+        shore = np.isin(cover, [Cover.SAND, Cover.GRASS, Cover.BOG, Cover.BARE])
+        if spec.tide_m > 0:
+            cover[shore & (land <= spec.tide_m)] = Cover.WATER
+        else:
+            cover[(cover == Cover.WATER) & (water <= -spec.tide_m)] = Cover.SAND
 
     keep = rng.random(len(world.buildings)) >= spec.buildings_removed
     buildings = [b for b, k in zip(world.buildings, keep, strict=True) if k]

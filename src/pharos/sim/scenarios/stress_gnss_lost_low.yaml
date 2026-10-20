@@ -1,0 +1,6 @@
+# GNSS jammed at 50 m over Irish pasture: the last fix is known to within 10 m, and
+# the flight stays low.
+base: ireland_pasture
+name: stress_gnss_lost_low
+known_start_m: 10
+trajectory: {altitude: 50, altitude_variation: 3}

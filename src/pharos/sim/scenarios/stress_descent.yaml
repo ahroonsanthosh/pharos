@@ -1,0 +1,5 @@
+# Find the position high, then go low: Irish pasture from 110 m, descending to 45 m
+# between 40 and 60 s (where frames hold a quarter of the ground) for the rest.
+base: ireland_pasture
+name: stress_descent
+trajectory: {altitude_profile: [[0, 110], [40, 110], [60, 45], [120, 45]], altitude_variation: 3}

@@ -1,0 +1,5 @@
+# The video link stutters: it freezes on one image for 3 and 4 s while the aircraft
+# flies on, and drops 5 s of frames altogether.
+base: ireland_pasture
+name: stress_video
+camera: {freezes: [[25, 3], [70, 4]], dropped: [[45, 5]]}

@@ -20,6 +20,10 @@ class TrajectorySpec:
     altitude: float = 180.0  # m above ground; over hills, above the takeoff point...
     follow_terrain: bool = False  # ...unless the aircraft keeps its height above ground
     altitude_variation: float = 10.0  # m, slow oscillation amplitude
+    # (time s, altitude m) points the height follows in between (e.g. a descent), instead
+    # of the constant altitude; and (start s, duration s) spans spent hovering in place.
+    altitude_profile: tuple[tuple[float, float], ...] = ()
+    hover: tuple[tuple[float, float], ...] = ()
     yaw_mode: str = "course"  # "course", "fixed", "spin"
     yaw_offset_deg: float = 0.0  # added to course (crabbing) or the fixed yaw
     spin_rate_deg_s: float = 6.0  # for yaw_mode "spin"
@@ -48,13 +52,17 @@ def generate_trajectory(
     path = _resample(catmull_rom(ctrl, 30), spec.speed / spec.fps)
 
     n = int(spec.duration_s * spec.fps)
-    if len(path) < n + 1:
-        path = np.vstack([path, np.repeat(path[-1:], n + 1 - len(path), 0)])
-    path = path[: n + 1]
+    if len(path) < n + 2:
+        path = np.vstack([path, np.repeat(path[-1:], n + 2 - len(path), 0)])
     t = np.arange(n) / spec.fps
-
-    step = np.diff(path, axis=0)
+    # how far along the path each frame is: time spent moving, not hovering
+    moving = t - sum(np.clip(t - a, 0.0, d) for a, d in spec.hover)
+    k = moving * spec.fps
+    i0 = np.minimum(k.astype(int), len(path) - 2)
+    w = (k - i0)[:, None]
+    step = path[i0 + 1] - path[i0]
     course = np.arctan2(step[:, 0], step[:, 1])  # compass: atan2(east, north)
+    path = path[i0] + w * step
     offset = np.radians(spec.yaw_offset_deg)
     if spec.yaw_mode == "course":
         heading = course + offset
@@ -68,7 +76,11 @@ def generate_trajectory(
     jitter = np.radians(spec.attitude_jitter_deg)
     wobble = [_smooth_noise(n, rng, spec.fps) * jitter for _ in range(3)]
     phase = rng.uniform(0, 2 * np.pi)
-    altitude = spec.altitude + spec.altitude_variation * np.sin(2 * np.pi * t / 45.0 + phase)
+    base = spec.altitude
+    if spec.altitude_profile:
+        times, heights = zip(*spec.altitude_profile, strict=True)
+        base = np.interp(t, times, heights)
+    altitude = base + spec.altitude_variation * np.sin(2 * np.pi * t / 45.0 + phase)
     return [
         GroundTruth(
             t=float(t[i]),

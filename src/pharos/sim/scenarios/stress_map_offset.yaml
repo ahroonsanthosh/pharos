@@ -1,0 +1,5 @@
+# The map's georeference is 10 m off (an old or carelessly registered orthophoto):
+# every match is off alike, which no amount of matching can reveal.
+base: ireland_pasture
+name: stress_map_offset
+map_shift_m: [8, -6]
