@@ -8,6 +8,7 @@ height above the takeoff point (the first point of the flight).
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import cache
 
 import cv2
 import numpy as np
@@ -18,7 +19,7 @@ from pharos.recording import Recording
 from pharos.sim.appearance import render
 from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
 from pharos.sim.trajectory import TrajectorySpec, generate_trajectory
-from pharos.sim.world import apply_changes, generate_terrain, generate_world
+from pharos.sim.world import apply_changes, generate_terrain, generate_world, surface_height
 from pharos.terrain import Terrain
 from pharos.types import Frame, GroundTruth, Telemetry
 
@@ -34,6 +35,8 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     geomap.terrain = generate_terrain(sc.terrain, sc.world.size_m, sc.seed + 4)
     today = apply_changes(world, sc.changes, sc.seed + 1)
     ground = _as_geomap(render(today, sc.flight_look), sc.world.gsd)
+    heights = surface_height(today) if sc.world.object_heights else None
+    texture = sc.world.fine_texture
 
     camera = Camera.from_fov(sc.camera.width, sc.camera.height, sc.camera.hfov_deg)
     truth = generate_trajectory(sc.trajectory, geomap.extent, sc.seed + 2)
@@ -45,7 +48,11 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     rng = np.random.default_rng(sc.seed + 3)
     sensors = _SensorModel(sc.telemetry, rng, truth, above)
     frames = [
-        Frame(g.t, render_frame(ground, camera, g, sc.camera, rng, geomap.terrain), sensors.read(i))
+        Frame(
+            g.t,
+            render_frame(ground, camera, g, sc.camera, rng, geomap.terrain, heights, texture),
+            sensors.read(i),
+        )
         for i, g in enumerate(truth)
     ]
     return geomap, Recording(camera, frames, truth, takeoff)
@@ -74,30 +81,68 @@ def render_frame(
     spec: CameraSpec,
     rng: np.random.Generator,
     terrain: Terrain | None = None,
+    heights: np.ndarray | None = None,
+    texture: float = 0.0,
 ) -> np.ndarray:
     """What the camera sees from ``pose`` over the ground image, with sensor effects.
 
     ``pose.altitude`` is the height above the ground under the aircraft; without
-    ``terrain`` the ground is flat.
+    ``terrain`` the ground is flat. With ``heights`` (metres, aligned with ``ground``)
+    what stands on the ground is drawn as layers a metre or two apart: a low camera
+    sees tree tops lean outwards and the sides of hedges and buildings (in shade).
+    ``texture`` is the contrast of fine detail fixed to the ground (grass, gravel),
+    drawn where the frame resolves finer than the ground image.
     """
     # Pick a ground pyramid level no finer than the frame so the warp does not alias.
     frame_gsd = pose.altitude / camera.fx
     level = int(np.clip(np.floor(np.log2(frame_gsd / ground.gsd)), 0, 4)) if frame_gsd > 0 else 0
     src, g = _color_level(ground, level)
-    if terrain is None:
-        H = ground_to_image(
-            camera, (pose.x, pose.y, pose.altitude), pose.heading, pose.pitch, pose.roll
-        )
-        A = np.array([[g, 0.0, ground.origin_x], [0.0, -g, ground.origin_y], [0.0, 0.0, 1.0]])
-        size = (camera.width, camera.height)
-        img = cv2.warpPerspective(src, H @ A, size, flags=cv2.INTER_LINEAR)
-    else:
-        xy = _ground_seen(camera, pose, terrain)
+
+    def surface(lift: float) -> np.ndarray:
+        """World (x, y) each pixel sees on the surface ``lift`` m above the ground."""
+        if terrain is None:
+            return _plane_seen(camera, pose, lift)
+        return _ground_seen(camera, pose, terrain, lift=lift)
+
+    detail = texture * float(np.clip(1.0 - frame_gsd / ground.gsd, 0.0, 1.0))
+    xy = surface(0.0) if detail > 0 else None
+
+    def seen(image: np.ndarray, lift: float, interpolation: int) -> np.ndarray:
+        """``image`` (at the chosen level) as seen on the surface ``lift`` m above ground."""
+        if terrain is None:
+            H = ground_to_image(
+                camera, (pose.x, pose.y, pose.altitude - lift), pose.heading, pose.pitch, pose.roll
+            )
+            A = np.array([[g, 0.0, ground.origin_x], [0.0, -g, ground.origin_y], [0.0, 0.0, 1.0]])
+            size = (camera.width, camera.height)
+            return cv2.warpPerspective(image, H @ A, size, flags=interpolation)
+        xy = _ground_seen(camera, pose, terrain, lift=lift)
         u = ((xy[..., 0] - ground.origin_x) / g).astype(np.float32)
         v = ((ground.origin_y - xy[..., 1]) / g).astype(np.float32)
-        img = cv2.remap(src, u, v, cv2.INTER_LINEAR)
+        return cv2.remap(image, u, v, interpolation)
+
+    img = seen(src, 0.0, cv2.INTER_LINEAR)
+    if heights is not None:
+        tall = cv2.resize(heights, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_NEAREST)
+        walls = tall - cv2.erode(tall, np.ones((3, 3), np.uint8)) > 1.5  # edges beside a drop
+        for z in (z for z in _LAYERS_M if z <= min(float(tall.max()), pose.altitude - 5.0)):
+            stands = seen(tall, z, cv2.INTER_LINEAR)
+            on = stands >= z
+            if not on.any():
+                continue
+            layer = seen(src, z, cv2.INTER_LINEAR)
+            # below the top of a wall (a hedge's or building's side), in its own shade
+            side = (
+                on & (stands >= z + 1.0) & (seen(walls.astype(np.uint8), z, cv2.INTER_NEAREST) > 0)
+            )
+            img[on] = layer[on]
+            img[side] = (0.7 * layer[side]).astype(np.uint8)
+            if xy is not None:
+                xy[on] = surface(z)[on]
 
     f = img.astype(np.float32) / 255.0
+    if xy is not None:
+        f *= (1.0 + detail * _fine_texture(xy))[..., None]
     if spec.blur > 0:
         f = cv2.GaussianBlur(f, (0, 0), spec.blur)
     if spec.motion_blur_px >= 1:
@@ -113,10 +158,47 @@ def render_frame(
     return cv2.imdecode(buf, cv2.IMREAD_COLOR) if ok else out
 
 
+_LAYERS_M = (*range(1, 13), 14, 16, 18, 20)  # metres; a top is drawn at the layer below it
+_TEXTURE_M = 0.08  # ground metres per pixel of the fine texture tile
+
+
+def _plane_seen(camera: Camera, pose: GroundTruth, lift: float = 0.0) -> np.ndarray:
+    """World (x, y) each image pixel sees on flat ground raised by ``lift`` m."""
+    uu, vv = np.meshgrid(np.arange(camera.width), np.arange(camera.height))
+    rays = np.stack([uu, vv, np.ones_like(uu)], -1) @ np.linalg.inv(camera.K).T
+    rays = rays @ camera_rotation(pose.heading, pose.pitch, pose.roll).T
+    down = np.minimum(rays[..., 2], -1e-3)
+    return np.array([pose.x, pose.y]) + rays[..., :2] * ((pose.altitude - lift) / -down)[..., None]
+
+
+@cache
+def _texture_tile() -> np.ndarray:
+    noise = np.random.default_rng(12345).standard_normal((512, 512)).astype(np.float32)
+    tile = cv2.GaussianBlur(np.pad(noise, 8, mode="wrap"), (0, 0), 1.0)[8:-8, 8:-8]
+    return tile / tile.std()  # seamless: it repeats every 512 pixels
+
+
+def _fine_texture(xy: np.ndarray) -> np.ndarray:
+    """Detail fixed to world positions ``xy``: two octaves (8 and 32 cm), unit spread."""
+    tile = _texture_tile()
+    out = np.zeros(xy.shape[:2], np.float32)
+    for scale, weight in ((_TEXTURE_M, 0.6), (4 * _TEXTURE_M, 0.8)):
+        u = (xy[..., 0] / scale).astype(np.float32)
+        v = (xy[..., 1] / scale).astype(np.float32)
+        out += weight * cv2.remap(tile, u, v, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+    return out
+
+
 def _ground_seen(
-    camera: Camera, pose: GroundTruth, terrain: Terrain, step: int = 4, rounds: int = 12
+    camera: Camera,
+    pose: GroundTruth,
+    terrain: Terrain,
+    step: int = 4,
+    rounds: int = 12,
+    lift: float = 0.0,
 ) -> np.ndarray:
-    """World (x, y) of the terrain each image pixel sees, by marching every ray.
+    """World (x, y) of the terrain (raised by ``lift`` m) each image pixel sees, by
+    marching every ray.
 
     Rays are traced on a grid ``step`` pixels apart and interpolated: the
     terrain is smooth on that scale.
@@ -128,10 +210,10 @@ def _ground_seen(
     down = np.minimum(rays[..., 2], -1e-3)  # rays at or above the horizon: far away
     origin = np.array([pose.x, pose.y])
     top = float(terrain.at(origin)) + pose.altitude
-    z = np.full((h, w), top - pose.altitude)
+    z = np.full((h, w), top - pose.altitude + lift)
     for _ in range(rounds):  # damped fixed point: where the ray meets the ground's height
         xy = origin + rays[..., :2] * ((top - z) / -down)[..., None]
-        z = 0.5 * z + 0.5 * np.minimum(terrain.at(xy), top - 1.0)
+        z = 0.5 * z + 0.5 * np.minimum(terrain.at(xy) + lift, top - 1.0)
     xy = origin + rays[..., :2] * ((top - z) / -down)[..., None]
     size = (w * step, h * step)
     full = np.stack([cv2.resize(xy[..., k], size, interpolation=cv2.INTER_LINEAR) for k in (0, 1)])

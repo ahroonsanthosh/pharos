@@ -124,3 +124,50 @@ def test_overcast_light_casts_no_shadows():
     flat = render(world, Look(sun_elevation_deg=90, overcast=1.0)).astype(float)
     # with no direct light the sun's position no longer matters
     assert np.abs(grey - flat).mean() < 0.3 * np.abs(sunny - flat).mean()
+
+
+def _roof_scene(roof_height):
+    """A white 6 m square roof 15 m east of a camera 40 m up, over grey ground."""
+    from pharos.geomap import GeoMap
+    from pharos.geometry import Camera
+    from pharos.sim.flight import render_frame
+    from pharos.sim.scenario import CameraSpec
+    from pharos.types import GroundTruth
+
+    image = np.full((200, 200, 3), 90, np.uint8)
+    image[94:106, 124:136] = 250  # x 12..18 m, y -3..3 m at 0.5 m per pixel, origin centred
+    ground = GeoMap(image, 0.5, origin_x=-49.75, origin_y=49.75)
+    heights = np.zeros((200, 200), np.float32)
+    heights[94:106, 124:136] = roof_height
+    camera = Camera.from_fov(320, 320, 80)
+    spec = CameraSpec(blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0)
+    pose = GroundTruth(0.0, 0.0, 0.0, 40.0, 0.0)
+    frame = render_frame(ground, camera, pose, spec, np.random.default_rng(0), heights=heights)
+    v, u = np.nonzero(frame[..., 1] > 200)
+    return np.hypot(u.mean() - camera.cx, v.mean() - camera.cy)
+
+
+def test_tall_objects_lean_outwards_in_low_frames():
+    """A roof 10 m up, seen from 40 m, sits 40/30 times further from the image centre."""
+    flat, tall = _roof_scene(0.0), _roof_scene(10.0)
+    assert tall / flat == pytest.approx(40 / 30, rel=0.05)
+
+
+def test_fine_texture_shows_only_where_frames_resolve_it():
+    from pharos.geomap import GeoMap
+    from pharos.geometry import Camera
+    from pharos.sim.flight import render_frame
+    from pharos.sim.scenario import CameraSpec
+    from pharos.types import GroundTruth
+
+    ground = GeoMap(np.full((400, 400, 3), 120, np.uint8), 0.5, origin_x=-100, origin_y=100)
+    camera = Camera.from_fov(320, 240, 80)
+    spec = CameraSpec(blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0)
+
+    def detail(altitude, texture):
+        pose = GroundTruth(0.0, 0.0, 0.0, altitude, 0.0)
+        frame = render_frame(ground, camera, pose, spec, np.random.default_rng(0), texture=texture)
+        return float(frame[60:180, 80:240, 1].std())
+
+    assert detail(30.0, 0.1) > 4 * max(detail(30.0, 0.0), 0.5)  # 10 cm per pixel: grass shows
+    assert detail(30.0, 0.1) > 2 * detail(150.0, 0.1)  # 50 cm per pixel: the image has it all

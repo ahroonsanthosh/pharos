@@ -67,6 +67,12 @@ class WorldSpec:
     # straight drains), and sea over this share of the map behind a ragged coast.
     bog_fraction: float = 0.0
     coast: float = 0.0
+    # Hedges, trees and buildings stand this tall in the frames (surface_height), so a low
+    # camera sees their tops lean outwards and their sides; the map shows them from above.
+    object_heights: bool = False
+    # Contrast of detail finer than the world image (grass, gravel, crop stubble), fixed
+    # to the ground: what frames from low down resolve and the map does not.
+    fine_texture: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -203,6 +209,20 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
         canopy=fbm(shape, rng, 8 * px, octaves=3),
         soil=fbm(shape, rng, 200 * px, octaves=5),
     )
+
+
+def surface_height(world: World) -> np.ndarray:
+    """Height in metres of what stands on the ground: hedges 2.5 to 5 m, tree crowns 10
+    to 20 m (varying with the crown texture), buildings their own height; 0 elsewhere."""
+    lo, hi = np.percentile(world.canopy, [2, 98])
+    crown = np.clip((world.canopy - lo) / max(hi - lo, 1e-6), 0.0, 1.0).astype(np.float32)
+    h = np.zeros(world.cover.shape, np.float32)
+    hedge, forest = world.cover == Cover.HEDGE, world.cover == Cover.FOREST
+    h[hedge] = 2.5 + 2.5 * crown[hedge]
+    h[forest] = 10.0 + 10.0 * crown[forest]
+    for b in world.buildings:
+        cv2.fillPoly(h, [np.round(b.corners).astype(np.int32)], float(b.height))
+    return np.where(world.cover == Cover.BUILDING, h, np.where(hedge | forest, h, 0.0))
 
 
 def generate_terrain(spec: TerrainSpec, size_m: float, seed: int) -> Terrain | None:
