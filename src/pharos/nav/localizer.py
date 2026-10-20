@@ -199,6 +199,8 @@ class Localizer:
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self._lost_at = 0.0
         self._airborne = False  # has left the ground (risen above takeoff)
+        self._start: tuple | None = None  # a known position to begin from (start_at)
+        self._started: tuple | None = None  # (log index, pose, covariance) it began at
         self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
@@ -233,6 +235,57 @@ class Localizer:
         self.log.append({"t": frame.t, "tel": frame.telemetry, "motion": self._motion, "fix": None})
         for h in self.hypotheses:
             h.frames.append(len(self.log) - 1)
+        if self._start is not None:  # a known position: a track begins at this frame
+            self._begin(frame)
+        else:
+            fix = self._step(frame, matchable)
+        self._last_t = frame.t
+        self._last_yaw = frame.telemetry.yaw
+        return self._estimate(frame.t, fix, (time.perf_counter() - start) * 1e3)
+
+    def start_at(
+        self,
+        xy: tuple[float, float],
+        sigma_m: float = 5.0,
+        heading: float | None = None,
+        heading_sigma_deg: float | None = None,
+    ) -> None:
+        """Begin from a known position at the next frame, e.g. the last GNSS fix before
+        jamming: ``xy`` in world coordinates, ``sigma_m`` how far off it may be.
+
+        Without ``heading`` the compass gives it. Within reach of a local search the
+        track starts at once (reported as coasting until matches support it);
+        otherwise, or with no heading at all, it starts as a lost track's dead
+        reckoning, whose region the acquisition searches.
+        """
+        self._start = (np.asarray(xy, float), float(sigma_m), heading, heading_sigma_deg)
+
+    def _begin(self, frame: Frame) -> None:
+        cfg, tel = self.cfg, frame.telemetry
+        xy, sigma, heading, heading_sigma = self._start
+        self._start = None
+        if heading is None and tel.yaw is not None:
+            heading = float(wrap_angle(tel.yaw + self.compass_offset))
+            heading_sigma = heading_sigma or cfg.window.compass_sigma_deg
+        known = heading is not None
+        sh = np.radians(heading_sigma or cfg.meas_heading_sigma_deg) if known else np.pi
+        pose = np.array([xy[0], xy[1], heading if known else 0.0])
+        cov = np.diag([sigma**2, sigma**2, sh**2])
+        w = PoseWindow(
+            cfg.window, frame.t, tel, pose, cov, self.compass_offset, self.odometry_scale
+        )
+        self._started = (len(self.log) - 1, pose, cov)
+        self.hypotheses, self._rejected, self._frames_in_state = [], [], 0
+        if known and cfg.search_sigmas * sigma <= cfg.max_search_m:
+            self.window, self.dead_reckoning = w, None
+            self.status, self._window_start = Status.TRACKING, frame.t
+        else:
+            self.window, self.dead_reckoning = None, w
+            self.status, self._lost_at, self._searches = Status.LOST, frame.t, 0
+
+    def _step(self, frame: Frame, matchable: bool) -> Fix | None:
+        """Track, acquire or converge on one frame; the match a track took, if any."""
+        fix = None
         if self.dead_reckoning is not None:
             self._dead_reckon(frame)
         if self.status is Status.TRACKING:
@@ -261,9 +314,7 @@ class Localizer:
             if self.status is Status.CONVERGING and not self.hypotheses:
                 self.status = Status.LOST
                 self._frames_in_state = 0
-        self._last_t = frame.t
-        self._last_yaw = frame.telemetry.yaw
-        return self._estimate(frame.t, fix, (time.perf_counter() - start) * 1e3)
+        return fix
 
     # -- acquisition and confirmation -------------------------------------
 
@@ -575,7 +626,8 @@ class Localizer:
             self.dead_reckoning = None
 
     def smooth(self) -> list[Estimate]:
-        """Whole-flight solve over every frame since the first confirmed track (recorded footage).
+        """Whole-flight solve over every frame since the first confirmed track, or the
+        known position it began from (recorded footage).
 
         Frames before the first confirmation keep their causal estimates. A frame is
         trusted with a small smoothed uncertainty and enough independent inlier matches
@@ -584,19 +636,24 @@ class Localizer:
         cfg, log = self.cfg, self.log
         estimates = [e["estimate"] for e in log]
         start = next((i for i, e in enumerate(log) if e["fix"] is not None), None)
-        if start is None:
+        if self._started is not None and (start is None or self._started[0] <= start):
+            start, pose, cov = self._started  # from the known position
+        elif start is None:
             return estimates
-        f0 = log[start]["fix"]
+        else:
+            f0 = log[start]["fix"]
+            pose, cov = np.array([f0.x, f0.y, f0.heading]), np.diag([100.0, 100.0, 0.05])
         w = PoseWindow(
             replace(cfg.window, span_s=float("inf")),
             log[start]["t"],
             log[start]["tel"],
-            np.array([f0.x, f0.y, f0.heading]),
-            np.diag([100.0, 100.0, 0.05]),
+            pose,
+            cov,
             self.compass_offset,
             self.odometry_scale,
         )
-        w.attach(f0)
+        if log[start]["fix"] is not None:
+            w.attach(log[start]["fix"])
         for e in log[start + 1 :]:
             est = e["estimate"]
             guess = None  # start from the causal estimate where there is one

@@ -337,3 +337,20 @@ def test_a_flight_below_its_takeoff_point_is_still_flying(small_sim):
     assert seen(40.0).altitude == 40.0  # climbed: a usable height above takeoff stays
     below = seen(-10.0)
     assert usable_view(below, loc.cfg) and not below.above_takeoff and below.altitude > 15
+
+
+def test_a_known_start_is_tracked_from_the_first_frame(small_sim):
+    """With the last fix before jamming, there is a position from the first frame and it
+    is trusted sooner than from a cold start."""
+    geomap, rec = small_sim
+    g = rec.truth[0]
+    known = localize(geomap, rec, start=((g.x + 8.0, g.y - 6.0), 10.0))
+    cold = localize(geomap, rec)
+
+    def first_trusted(estimates):
+        return next(i for i, e in enumerate(estimates) if e.status is Status.TRACKING)
+
+    assert all(e.status in (Status.TRACKING, Status.COASTING) for e in known)
+    assert first_trusted(known) < first_trusted(cold)
+    m = evaluate(known, rec.truth)
+    assert m["misleading"] == 0 and m["coverage_25m"] > evaluate(cold, rec.truth)["coverage_25m"]

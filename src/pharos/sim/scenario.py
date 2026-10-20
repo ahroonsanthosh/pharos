@@ -55,6 +55,9 @@ class Scenario:
     trajectory: TrajectorySpec = field(default_factory=TrajectorySpec)
     camera: CameraSpec = field(default_factory=CameraSpec)
     telemetry: TelemetrySpec = field(default_factory=TelemetrySpec)
+    # GNSS lost at the start, its last fix known to within this many metres (None: a cold
+    # start, nothing known). The fix given is the truth off by that much, at random.
+    known_start_m: float | None = None
 
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"
