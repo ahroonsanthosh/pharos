@@ -93,6 +93,9 @@ class LocalizerConfig:
     wide_search_every: int = 3
     max_dead_reckoning_m: float = 2000.0  # beyond this 3-sigma radius, dead reckoning stops
     max_speed: float = 30.0  # m/s; faster odometry is a wrong fit
+    # A known start's speed against odometry over this long gives the height above the
+    # ground, when the heights are above a takeoff point not known.
+    height_from_speed_s: float = 3.0
     # Confirmation
     confirm_frames: int = 4
     confirm_distance_m: float = 120.0  # ground covered before a candidate can win
@@ -211,7 +214,7 @@ class Localizer:
         self._lost_at = 0.0
         self._airborne = False  # has left the ground (risen above takeoff)
         self._start: tuple | None = None  # a known position to begin from (start_at)
-        self._start_motion: tuple | None = None  # (time, xy, velocity) it began with
+        self._start_motion: dict | None = None  # a known start's speed and odometry since
         self._started: tuple | None = None  # (log index, pose, covariance) it began at
         self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
@@ -286,7 +289,8 @@ class Localizer:
         xy, sigma, heading, heading_sigma, velocity = self._start
         self._start = None
         if velocity is not None:
-            self._start_motion = (frame.t, xy, np.asarray(velocity[:2], float))
+            v = np.asarray(velocity[:2], float)
+            self._start_motion = {"t": frame.t, "xy": xy, "v": v, "sum": np.zeros(2), "from": None}
         if heading is None and tel.yaw is not None:
             heading = float(wrap_angle(tel.yaw + self.compass_offset))
             heading_sigma = heading_sigma or cfg.window.compass_sigma_deg
@@ -318,32 +322,40 @@ class Localizer:
 
         A clip or feed that begins in mid-air reports heights above a takeoff point it
         never shows, which may lie far below or above this ground (a DJI video split in
-        parts read 90 m over ground 55 m below it). Odometry measures a step in metres
-        at the reported height; the start's speed says how long it really was. The first
-        step at or after the start is used, while that speed still holds.
+        parts read 90 m over ground 55 m below it). Odometry measures its steps in
+        metres at the reported height; the start's speed says how far the aircraft
+        really went. Steps are added up over ``height_from_speed_s``, so that attitude
+        errors, metres at a time in a single step, count only at the two ends.
         """
-        t0, xy, velocity = self._start_motion
-        tel, m = frame.telemetry, self._motion
-        if frame.t - t0 > 1.0 or not tel.above_takeoff or self.takeoff_elevation is not None:
+        cfg, c = self.cfg, self._start_motion
+        tel, m, last_yaw = frame.telemetry, self._motion, self._last_yaw
+        if not tel.above_takeoff or self.takeoff_elevation is not None or tel.altitude <= 0:
             self._start_motion = None
             return
-        if m is None or self._last_t is None or tel.altitude <= 0:
-            return  # wait for a step
-        self._start_motion = None
-        step = float(np.hypot(*velocity)) * (frame.t - self._last_t)
-        seen = float(np.hypot(*m.d_body))
-        if step < 1.0 or not 0.25 < step / seen < 4.0:  # too slow to tell, or odometry failed
+        if m is None or self._last_t is None or last_yaw is None or tel.yaw is None:
+            if c["from"] is not None or frame.t - c["t"] > 1.0:
+                self._start_motion = None  # a gap in the steps, or none to begin with
             return
-        k = step / seen
-        self._motion = replace(m, d_body=m.d_body * k)
-        self.log[-1]["motion"] = self._motion
+        if c["from"] is None:
+            c["from"], c["yaw"] = self._last_t, last_yaw
+        c["sum"] += rot2(last_yaw + self.compass_offset) @ m.d_body
+        span = frame.t - c["from"]
+        if span < cfg.height_from_speed_s:
+            return
+        self._start_motion = None
+        true = float(np.hypot(*c["v"])) * span
+        seen = float(np.hypot(*c["sum"]))
+        turned = abs(wrap_angle(tel.yaw - c["yaw"])) > np.radians(30)  # a chord, not the path
+        if true < 3.0 or turned or not 0.25 < true / max(seen, 1e-9) < 4.0:
+            return  # too slow to tell, turning, or odometry failed
+        k = true / seen
+        self._rescale_steps(c["from"], k)
         if self.terrain is None:
             self.scale *= k
             return
         height = k * self.scale * tel.altitude
-        heading = 0.0 if tel.yaw is None else tel.yaw + self.compass_offset
         ahead = footprint(self.camera, height, tel.pitch, tel.roll).center
-        here = xy + velocity * (frame.t - t0) + rot2(heading) @ ahead
+        here = c["xy"] + c["v"] * (frame.t - c["t"]) + rot2(tel.yaw + self.compass_offset) @ ahead
         ground = self.terrain.at(here)
         if not np.isfinite(ground):
             self.scale *= k
@@ -351,6 +363,18 @@ class Localizer:
         self.takeoff_elevation = float(ground) + height - tel.altitude
         self.scale = 1.0  # heights now follow the terrain, from that takeoff
         self._height = self._height_field(tel)
+
+    def _rescale_steps(self, since: float, k: float) -> None:
+        """Odometry steps after ``since``, measured at a wrong height, ``k`` times longer."""
+        self._motion = replace(self._motion, d_body=self._motion.d_body * k)
+        for entry in self.log:
+            if entry["t"] > since and entry["motion"] is not None:
+                entry["motion"] = replace(entry["motion"], d_body=entry["motion"].d_body * k)
+        self.log[-1]["motion"] = self._motion
+        for w in (self.window, self.dead_reckoning):
+            for node in w.nodes if w is not None else ():
+                if node.t > since and node.motion is not None:
+                    node.motion = replace(node.motion, d_body=node.motion.d_body * k)
 
     def _step(self, frame: Frame, matchable: bool) -> Fix | None:
         """Track, acquire or converge on one frame; the match a track took, if any."""

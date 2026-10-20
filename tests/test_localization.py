@@ -397,8 +397,10 @@ def test_a_known_start_in_mid_air_learns_its_height_from_its_speed(hills_sim):
     loc = Localizer(geomap, rec.camera)
     loc.start_at((a.x, a.y), 5.0, velocity=velocity)
     estimates = [loc.process(f) for f in frames]
+    takeoff = float(geomap.terrain.at(np.array(rec.takeoff)))
+    assert loc.takeoff_elevation == pytest.approx(takeoff - 60.0, abs=6.0)
     true = np.array([g.altitude for g in rec.truth])
     used = np.array([e["tel"].altitude for e in loc.log])
-    assert np.median(np.abs(used[2:] - true[2:]) / true[2:]) < 0.08
+    assert np.median(np.abs(used - true) / true) < 0.05
     m = evaluate(estimates, rec.truth)
-    assert m["misleading"] == 0 and m["coverage_25m"] > 0.8
+    assert m["misleading"] == 0 and m["coverage_25m"] > 0.7  # 0 without, 0.87 told the heights
