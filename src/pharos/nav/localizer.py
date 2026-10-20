@@ -272,7 +272,14 @@ class Localizer:
         pose = np.array([xy[0], xy[1], heading if known else 0.0])
         cov = np.diag([sigma**2, sigma**2, sh**2])
         w = PoseWindow(
-            cfg.window, frame.t, tel, pose, cov, self.compass_offset, self.odometry_scale
+            cfg.window,
+            frame.t,
+            tel,
+            pose,
+            cov,
+            self.compass_offset,
+            self.odometry_scale,
+            speed_sigma=cfg.max_speed / 2,  # how fast it was going, nothing says yet
         )
         self._started = (len(self.log) - 1, pose, cov)
         self.hypotheses, self._rejected, self._frames_in_state = [], [], 0

@@ -67,3 +67,18 @@ def test_odometry_over_a_slope_across_the_track_sees_no_turn(small_sim):
         turns[name] = abs(np.degrees(motion.d_heading))
         assert np.hypot(*(motion.d_body - (0.0, 8.0))) < (1.0 if terrain else 3.0)
     assert turns["plane"] > 1.0 and turns["terrain"] < 0.2
+
+
+def test_odometry_works_in_flat_grey_light(small_sim):
+    """Overcast and haze leave a fifth of the contrast: features must still be found."""
+    from dataclasses import replace
+
+    _, rec = small_sim
+    vo = VisualOdometry(rec.camera)
+
+    def grey(frame):
+        f = frame.image.astype(np.float32)
+        return replace(frame, image=(f.mean() + 0.2 * (f - f.mean())).astype(np.uint8))
+
+    motions = [vo.step(grey(f)) for f in rec.frames[:8]]
+    assert all(m is not None for m in motions[1:])

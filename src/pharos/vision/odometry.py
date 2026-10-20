@@ -32,6 +32,10 @@ Relief = Callable[[np.ndarray], np.ndarray]
 class OdometryConfig:
     max_width: int = 800  # frames are downscaled to this for feature extraction
     features: int = 2000
+    # SIFT's contrast threshold. Its default (0.04) found no features at all in grey,
+    # hazy frames over moorland at 60 m (Irish overcast); at 0.01 every pair of frames
+    # gave a motion, and frames that had features moved as before.
+    contrast: float = 0.01
     ratio: float = 0.75  # Lowe ratio test
     ransac_px: float = 3.0  # inlier threshold in frame pixels at the ground...
     ransac_relief: float = 0.02  # ...or this fraction of altitude (trees, roofs: parallax)
@@ -66,7 +70,9 @@ class VisualOdometry:
     def __init__(self, camera: Camera, cfg: OdometryConfig | None = None):
         self.camera = camera
         self.cfg = cfg or OdometryConfig()
-        self._sift = cv2.SIFT_create(nfeatures=self.cfg.features)
+        self._sift = cv2.SIFT_create(
+            nfeatures=self.cfg.features, contrastThreshold=self.cfg.contrast
+        )
         self._matcher = cv2.BFMatcher(cv2.NORM_L2)
         self._prev: tuple[np.ndarray, np.ndarray, Frame, float] | None = None
 

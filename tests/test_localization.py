@@ -354,3 +354,16 @@ def test_a_known_start_is_tracked_from_the_first_frame(small_sim):
     assert first_trusted(known) < first_trusted(cold)
     m = evaluate(known, rec.truth)
     assert m["misleading"] == 0 and m["coverage_25m"] > evaluate(cold, rec.truth)["coverage_25m"]
+
+
+def test_a_known_start_survives_frames_without_odometry(small_sim):
+    """Before odometry says how fast it flies, the track is bounded by how fast it can."""
+    from pharos.nav.localizer import LocalizerConfig
+
+    geomap, rec = small_sim
+    g = rec.truth[0]
+    loc = Localizer(geomap, rec.camera, LocalizerConfig(odometry=None))
+    loc.start_at((g.x, g.y), 5.0)
+    first = [loc.process(f) for f in rec.frames[:3]]
+    assert all(e.status in (Status.TRACKING, Status.COASTING) for e in first)
+    assert first[-1].sigma_xy < 50.0
