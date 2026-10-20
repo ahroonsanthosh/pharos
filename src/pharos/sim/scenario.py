@@ -71,6 +71,9 @@ class Scenario:
     # start, nothing known). The fix given is the truth off by that much, at random.
     known_start_m: float | None = None
     map_shift_m: tuple[float, float] = (0.0, 0.0)  # the map's georeference is this far off
+    # The map stops short of the flight: metres cut off its (west, south, east, north) sides
+    # after the flight is planned over the whole world.
+    map_crop_m: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"

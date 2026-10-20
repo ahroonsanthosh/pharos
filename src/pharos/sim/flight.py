@@ -42,6 +42,8 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
 
     camera = Camera.from_fov(sc.camera.width, sc.camera.height, sc.camera.hfov_deg)
     truth = generate_trajectory(sc.trajectory, geomap.extent, sc.seed + 2)
+    if any(sc.map_crop_m):
+        geomap = _cropped(geomap, sc.map_crop_m)
     above, takeoff = None, None
     if geomap.terrain is not None:
         truth, above = _over_terrain(truth, geomap.terrain, sc.trajectory)
@@ -62,6 +64,20 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
         frames.append(Frame(g.t, still, tel))  # frozen video repeats its last image
         kept.append(g)
     return geomap, Recording(camera, frames, kept, takeoff)
+
+
+def _cropped(geomap: GeoMap, crop_m) -> GeoMap:
+    """The map without the given metres of its (west, south, east, north) sides."""
+    w, s, e, n = (round(m / geomap.gsd) for m in crop_m)
+    rows, cols = geomap.shape
+    return GeoMap(
+        geomap.image[n : rows - s, w : cols - e],
+        geomap.gsd,
+        origin_x=geomap.origin_x + w * geomap.gsd,
+        origin_y=geomap.origin_y - n * geomap.gsd,
+        geo_origin=geomap.geo_origin,
+        terrain=geomap.terrain,
+    )
 
 
 def _within(t: float, spans) -> bool:

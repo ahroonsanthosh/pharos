@@ -174,7 +174,7 @@ def test_fine_texture_shows_only_where_frames_resolve_it():
 
 
 def test_stress_effects_happen_where_asked():
-    """Frozen and lost video, stale telemetry, a pulled compass, a shifted map, tides."""
+    """Frozen and lost video, stale telemetry, a pulled compass, a shifted and cut map."""
     from pharos.sim.flight import simulate
     from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
 
@@ -184,12 +184,13 @@ def test_stress_effects_happen_where_asked():
         trajectory=TrajectorySpec(duration_s=12, margin_m=170, altitude=150),
         camera=CameraSpec(width=320, height=240),
     )
-    _, plain = simulate(base)
+    plain_map, plain = simulate(base)
     sc = replace(
         base,
         camera=replace(base.camera, freezes=((2.0, 2.0),), dropped=((6.0, 1.5),)),
         telemetry=TelemetrySpec(dropouts=((8.0, 2.0),), compass_jumps=((4.0, 2.0, 40.0),)),
         map_shift_m=(7.0, -3.0),
+        map_crop_m=(0.0, 0.0, 0.0, 250.0),
     )
     geomap, rec = simulate(sc)
     t = [f.t for f in rec.frames]
@@ -202,7 +203,10 @@ def test_stress_effects_happen_where_asked():
     calm = {f.t: f.telemetry.yaw for f in plain.frames}
     jump = np.degrees(np.angle(np.exp(1j * (pulled[4.5] - calm[4.5]))))
     assert jump == pytest.approx(40.0, abs=5.0)
-    assert geomap.origin_x - simulate(base)[0].origin_x == pytest.approx(7.0)
+    assert geomap.origin_x - plain_map.origin_x == pytest.approx(7.0)
+    assert plain_map.origin_y - geomap.origin_y == pytest.approx(253.0)
+    assert plain_map.shape[0] - geomap.shape[0] == round(250.0 / geomap.gsd)
+    assert any(not geomap.contains(g.x, g.y) for g in rec.truth)  # flown off the map
 
 
 def test_tide_moves_the_shoreline():
