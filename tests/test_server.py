@@ -38,6 +38,22 @@ def test_recorded_dji_flight(small_sim, tmp_path):
     assert "lat" in tracking[-1] and feed.preview is not None
 
 
+def test_a_feed_can_start_from_the_first_gnss_fix(small_sim, tmp_path):
+    """From the first fix there is a position at once, and GNSS checked against it."""
+    geomap, rec = small_sim
+    store = MapStore(tmp_path / "maps")
+    store.add("test-area", geomap)
+    video, srt = write_dji_recording(rec, geomap, tmp_path)
+    spec = FeedSpec(
+        source=str(video), map="test-area", telemetry=f"srt:{srt}", start_from_gnss=True
+    )
+    feed = Feed("feed-gnss", spec, store)
+    assert wait_for(feed) == "finished", feed.error
+    assert all(r["status"] in ("tracking", "coasting") for r in feed.records)
+    checks = {r.get("gnss_check") for r in feed.records if r["status"] == "tracking"}
+    assert checks == {"agrees"}
+
+
 def test_browser_frames(small_sim, tmp_path):
     geomap, rec = small_sim
     store = MapStore(tmp_path / "maps")

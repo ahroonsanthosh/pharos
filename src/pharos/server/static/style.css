@@ -36,6 +36,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: v
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-top: 12px; }
 
 label { display: block; margin: 8px 0; color: var(--muted); font-size: 12px; }
+label.check { display: flex; align-items: center; gap: 6px; }
+label.check input { display: inline; width: auto; margin: 0; }
 input, select { display: block; width: 100%; margin-top: 3px; padding: 6px 8px; background: var(--bg); color: var(--text);
   border: 1px solid var(--line); border-radius: 6px; font: inherit; }
 input[type="checkbox"] { display: inline; width: auto; margin: 0 4px 0 0; }

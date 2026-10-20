@@ -33,6 +33,7 @@ from pharos.eval.export import record
 from pharos.footage import load_photos
 from pharos.geomap import GeoMap
 from pharos.geometry import Camera
+from pharos.nav.gnss import GnssCheck
 from pharos.nav.localizer import Localizer
 from pharos.server.store import MapStore
 from pharos.sim.flight import simulate
@@ -65,6 +66,9 @@ class FeedSpec:
     tilt_deg: float = 0.0  # manual telemetry: camera tilt forward from straight down
     mount: str = "gimbal"  # MAVLink: "gimbal" (stabilized) or "fixed" to the airframe
     video_delay_s: float = 0.0  # live feeds: how far the video lags the telemetry
+    # Begin from the aircraft's first GNSS fix (then never use GNSS again, so jamming or
+    # spoofing later cannot pull the track away); off: a cold start, GNSS only shown.
+    start_from_gnss: bool = False
 
 
 class FrameSource(Protocol):
@@ -148,6 +152,7 @@ class Feed:
     def _loop(self, source: FrameSource, geomap: GeoMap) -> None:
         assert self.telemetry is not None
         localizer: Localizer | None = None
+        check, started = GnssCheck(), False
         period = 1.0 / self.spec.rate_hz
         next_due = time.monotonic()
         while not self._stop.is_set():
@@ -177,9 +182,16 @@ class Feed:
             xy = geomap.from_latlon(*home) if home is not None else None
             if localizer.takeoff_elevation is None and xy is not None:
                 localizer.set_takeoff(xy)
+            gnss_xy = geomap.from_latlon(*sample.gnss) if sample.gnss is not None else None
+            if self.spec.start_from_gnss and not started and gnss_xy is not None:
+                localizer.start_at(gnss_xy, check.gnss_sigma_m)
+                started = True
             estimate = localizer.process(Frame(t, image, sample.telemetry))
             used = localizer.log[-1]["tel"]
-            self.records.append(record(estimate, sample.telemetry, sample.gnss, geomap, used))
+            rec = record(estimate, sample.telemetry, sample.gnss, geomap, used)
+            if (verdict := check.update(estimate, gnss_xy)) is not None:
+                rec["gnss_check"] = verdict  # "disagrees": the GNSS may be spoofed
+            self.records.append(rec)
             preview = cv2.imencode(".jpg", _limit_width(image, PREVIEW_WIDTH))[1]
             self.preview = preview.tobytes()
 

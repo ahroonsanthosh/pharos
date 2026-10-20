@@ -116,6 +116,10 @@ drawn in green and gives you the accuracy of every flight.
 * **Video delay:** the video arrives later than the telemetry, typically 0.5
   to 1.5 s through a streaming pipeline. Set it once on a flight that has
   GPS: pick the value that minimizes *Error vs GNSS*.
+* **Start from the first GPS fix:** tick this when the aircraft has GPS at
+  takeoff and may lose it later. Pharos then begins from that fix instead of
+  searching the whole map, and never uses GPS again, so later jamming or
+  spoofing cannot pull its position away.
 
 ### Archived footage and photo sets
 
@@ -155,6 +159,11 @@ ffmpeg -re -i flight.mp4 -c:v libx264 -tune zerolatency -f flv rtmp://localhost:
 * **lost**: no confident match (over featureless ground, or before the first
   fix). Pharos says so instead of guessing.
 * **Error vs GNSS** appears whenever the aircraft reports its own GPS.
+* **GNSS check** compares that GPS with pharos's own position while pharos
+  trusts it. *disagrees* (the status bar turns red) means GPS has been
+  further off than both uncertainties allow for more than 3 s: a spoofed
+  receiver looks like this, since it keeps a confident fix while it walks
+  away. A jammed receiver simply loses its fix.
 
 ## Limits to know
 
