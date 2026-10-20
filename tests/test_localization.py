@@ -404,3 +404,19 @@ def test_a_known_start_in_mid_air_learns_its_height_from_its_speed(hills_sim):
     assert np.median(np.abs(used - true) / true) < 0.05
     m = evaluate(estimates, rec.truth)
     assert m["misleading"] == 0 and m["coverage_25m"] > 0.7  # 0 without, 0.87 told the heights
+
+
+def test_a_frozen_video_does_not_hold_the_track_back(small_sim):
+    """A stalled link repeats its last picture for 3 s while the aircraft flies on: the
+    repeats are not matched (they show where it was) and the track dead-reckons."""
+    from dataclasses import replace
+
+    geomap, rec = small_sim
+    frames = list(rec.frames)
+    for i in range(30, 36):
+        frames[i] = replace(frames[i], image=frames[29].image)
+    loc = Localizer(geomap, rec.camera)
+    estimates = [loc.process(f) for f in frames]
+    m = evaluate(estimates, rec.truth)
+    assert m["misleading"] == 0 and m["within_3_sigma"] == 1.0
+    assert all(loc.log[i]["fix"] is None and loc.log[i]["motion"] is None for i in range(30, 36))

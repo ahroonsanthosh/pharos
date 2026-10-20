@@ -209,6 +209,7 @@ class Localizer:
         self._frames_in_state = 0
         self._last_t: float | None = None
         self._last_yaw: float | None = None
+        self._last_sample: np.ndarray | None = None  # of the previous image, to spot repeats
         self.window: PoseWindow | None = None
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self._lost_at = 0.0
@@ -234,8 +235,11 @@ class Localizer:
         belief = self._belief(frame.t) if self._height is not None else None
         frame = self._above_ground(frame, belief)
         fix = None
-        usable = usable_view(frame.telemetry, self.cfg)
-        matchable = matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame)
+        still = self._repeated(frame)  # a frozen video link: nothing new to see
+        usable = usable_view(frame.telemetry, self.cfg) and not still
+        matchable = (
+            matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame) and not still
+        )
         self._motion = None
         if self.odometry is not None:
             if usable:
@@ -903,6 +907,18 @@ class Localizer:
             return False
         dt = frame.t - self.log[-1]["t"]
         return dt <= 0 or abs(tel.tilt - last.tilt) / dt > np.radians(cfg.rolling_deg_s)
+
+    def _repeated(self, frame: Frame) -> bool:
+        """Whether the frame repeats the previous image exactly.
+
+        A video link that stalls keeps delivering its last picture while the aircraft
+        flies on: matched, it holds the track back at the place it shows, and odometry
+        reads it as standing still. A camera never repeats itself to the bit (its noise
+        sees to that), so an exact repeat is not a new view. Every 8th pixel is compared.
+        """
+        sample = np.ascontiguousarray(frame.image[::8, ::8])
+        last, self._last_sample = self._last_sample, sample
+        return last is not None and np.array_equal(sample, last)
 
     def _plausible(self, m: Motion | None, t: float) -> Motion | None:
         """Odometry, unless it implies an impossible speed (RANSAC on a wrong cluster)."""
