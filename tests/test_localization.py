@@ -380,3 +380,25 @@ def test_low_frames_match_on_a_finer_map_level(small_sim):
     frame = rec.frames[0]
     assert m._levels(frame, 170.0) == (1, 2)
     assert m._levels(frame, 40.0) == (0, 1)
+
+
+def test_a_known_start_in_mid_air_learns_its_height_from_its_speed(hills_sim):
+    """Heights read from a takeoff point 60 m below this ground (a video that begins in
+    mid-air): the start's ground speed against odometry's step gives the true height."""
+    from dataclasses import replace
+
+    geomap, rec = hills_sim
+    frames = [
+        replace(f, telemetry=replace(f.telemetry, altitude=f.telemetry.altitude + 60.0))
+        for f in rec.frames
+    ]
+    a, b = rec.truth[:2]
+    velocity = ((b.x - a.x) / (b.t - a.t), (b.y - a.y) / (b.t - a.t))
+    loc = Localizer(geomap, rec.camera)
+    loc.start_at((a.x, a.y), 5.0, velocity=velocity)
+    estimates = [loc.process(f) for f in frames]
+    true = np.array([g.altitude for g in rec.truth])
+    used = np.array([e["tel"].altitude for e in loc.log])
+    assert np.median(np.abs(used[2:] - true[2:]) / true[2:]) < 0.08
+    m = evaluate(estimates, rec.truth)
+    assert m["misleading"] == 0 and m["coverage_25m"] > 0.8

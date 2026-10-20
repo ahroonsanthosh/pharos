@@ -102,6 +102,10 @@ class LocalizerConfig:
     # A match must stand out from its window's noise. With the frame-sized template, 2 keeps
     # fewer chance peaks than 1.5 did with the disk and still finds more true ones.
     track_min_excess: float = 2.0
+    # A match standing out less still counts if it scores this well (inf: never). Low down
+    # a true match stands out less from its window, while decoys score lower.
+    track_strong_score: float = float("inf")
+    track_low_excess: float = 1.0
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
     # A confirmed track keeps searching around its prediction (reported as coasting) while
     # the window that needs stays within max_search_m, for up to max_coast_s. Longer coasts
@@ -207,6 +211,7 @@ class Localizer:
         self._lost_at = 0.0
         self._airborne = False  # has left the ground (risen above takeoff)
         self._start: tuple | None = None  # a known position to begin from (start_at)
+        self._start_motion: tuple | None = None  # (time, xy, velocity) it began with
         self._started: tuple | None = None  # (log index, pose, covariance) it began at
         self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
@@ -242,9 +247,12 @@ class Localizer:
         self.log.append({"t": frame.t, "tel": frame.telemetry, "motion": self._motion, "fix": None})
         for h in self.hypotheses:
             h.frames.append(len(self.log) - 1)
-        if self._start is not None:  # a known position: a track begins at this frame
+        begins = self._start is not None  # a known position: a track begins at this frame
+        if begins:
             self._begin(frame)
-        else:
+        if self._start_motion is not None:
+            self._height_from_speed(frame)
+        if not begins:
             fix = self._step(frame, matchable)
         self._last_t = frame.t
         self._last_yaw = frame.telemetry.yaw
@@ -277,6 +285,8 @@ class Localizer:
         cfg, tel = self.cfg, frame.telemetry
         xy, sigma, heading, heading_sigma, velocity = self._start
         self._start = None
+        if velocity is not None:
+            self._start_motion = (frame.t, xy, np.asarray(velocity[:2], float))
         if heading is None and tel.yaw is not None:
             heading = float(wrap_angle(tel.yaw + self.compass_offset))
             heading_sigma = heading_sigma or cfg.window.compass_sigma_deg
@@ -302,6 +312,45 @@ class Localizer:
         else:
             self.window, self.dead_reckoning = None, w
             self.status, self._lost_at, self._searches = Status.LOST, frame.t, 0
+
+    def _height_from_speed(self, frame: Frame) -> None:
+        """The height above the ground from a known start's ground speed.
+
+        A clip or feed that begins in mid-air reports heights above a takeoff point it
+        never shows, which may lie far below or above this ground (a DJI video split in
+        parts read 90 m over ground 55 m below it). Odometry measures a step in metres
+        at the reported height; the start's speed says how long it really was. The first
+        step at or after the start is used, while that speed still holds.
+        """
+        t0, xy, velocity = self._start_motion
+        tel, m = frame.telemetry, self._motion
+        if frame.t - t0 > 1.0 or not tel.above_takeoff or self.takeoff_elevation is not None:
+            self._start_motion = None
+            return
+        if m is None or self._last_t is None or tel.altitude <= 0:
+            return  # wait for a step
+        self._start_motion = None
+        step = float(np.hypot(*velocity)) * (frame.t - self._last_t)
+        seen = float(np.hypot(*m.d_body))
+        if step < 1.0 or not 0.25 < step / seen < 4.0:  # too slow to tell, or odometry failed
+            return
+        k = step / seen
+        self._motion = replace(m, d_body=m.d_body * k)
+        self.log[-1]["motion"] = self._motion
+        if self.terrain is None:
+            self.scale *= k
+            return
+        height = k * self.scale * tel.altitude
+        heading = 0.0 if tel.yaw is None else tel.yaw + self.compass_offset
+        ahead = footprint(self.camera, height, tel.pitch, tel.roll).center
+        here = xy + velocity * (frame.t - t0) + rot2(heading) @ ahead
+        ground = self.terrain.at(here)
+        if not np.isfinite(ground):
+            self.scale *= k
+            return
+        self.takeoff_elevation = float(ground) + height - tel.altitude
+        self.scale = 1.0  # heights now follow the terrain, from that takeoff
+        self._height = self._height_field(tel)
 
     def _step(self, frame: Frame, matchable: bool) -> Fix | None:
         """Track, acquire or converge on one frame; the match a track took, if any."""
@@ -514,8 +563,7 @@ class Localizer:
         )
         fixes = self._match(frame, region)
         fix = fixes[0] if fixes else None
-        min_excess = cfg.track_min_excess + (0.0 if h.trusted else cfg.untrusted_extra_excess)
-        if fix is not None and (fix.score < cfg.track_min_score or fix.excess < min_excess):
+        if not self._accepts(fix, 0.0 if h.trusted else cfg.untrusted_extra_excess):
             fix = None
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
@@ -603,9 +651,7 @@ class Localizer:
             )
             fixes = self._match(frame, region)
             fix = fixes[0] if fixes else None
-            if fix is not None and (
-                fix.score < cfg.track_min_score or fix.excess < cfg.track_min_excess
-            ):
+            if not self._accepts(fix):
                 fix = None
             if fix is not None:
                 w.attach(fix)
@@ -624,6 +670,17 @@ class Localizer:
         w.trim()
         self.compass_offset, self.odometry_scale = w.compass_offset, w.scale
         return fix
+
+    def _accepts(self, fix: Fix | None, extra_excess: float = 0.0) -> bool:
+        """Whether a match stands out from its search window and scores well enough."""
+        cfg = self.cfg
+        if fix is None:
+            return False
+        clear = fix.excess >= cfg.track_min_excess + extra_excess
+        if fix.score >= cfg.track_min_score and clear:
+            return True
+        strong = fix.score >= cfg.track_strong_score
+        return strong and fix.excess >= cfg.track_low_excess + extra_excess
 
     def _trusted(self, w: PoseWindow) -> bool:
         cfg = self.cfg

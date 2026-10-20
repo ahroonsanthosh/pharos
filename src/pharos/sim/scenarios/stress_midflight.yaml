@@ -1,0 +1,8 @@
+# GNSS lost on a flight that pharos joins in mid-air, 80 m over hills: the last fix is
+# known to within 10 m, but the heights are read from a takeoff point it never saw,
+# 40 m off this ground (a long DJI video split into parts does this).
+base: hills
+name: stress_midflight
+known_start_m: 10
+trajectory: {altitude: 80}
+telemetry: {takeoff_known: false, altitude_offset_m: 40}
