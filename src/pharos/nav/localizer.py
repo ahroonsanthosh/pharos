@@ -716,20 +716,36 @@ class Localizer:
         return strong and fix.excess >= cfg.track_low_excess + extra_excess
 
     def _trusted(self, w: PoseWindow) -> bool:
+        """Supported by matches, and not disputed by the ones it turned down."""
+        return self._supported(w) and not self._disputed(self.log[-1]["t"])
+
+    def _supported(self, w: PoseWindow) -> bool:
         cfg = self.cfg
         support = w.support(cfg.reconfirm_distance_m)
         return w.sigma() <= cfg.trust_sigma_m and support >= cfg.trust_support
+
+    def _disputed(self, t: float) -> bool:
+        """Whether matches the track turned down lately keep pointing to one other place.
+
+        Odometry that reads short makes a track drift while its sigma stays small, and it
+        then rejects the true matches as too far off: low over simulated pasture a
+        trusted track sat 20 to 28 m off for 6 s, turning down matches 1 to 3 m from the
+        truth. Such a track no longer claims trust; it does not jump to them either.
+        """
+        cfg = self.cfg
+        recent = [o for s, o in self._rejected if t - s <= cfg.contradiction_window_s]
+        if len(recent) < cfg.contradiction_matches:
+            return False
+        offsets = np.array(recent)
+        spread = np.hypot(*(offsets - np.median(offsets, axis=0)).T)
+        return bool(np.all(spread <= cfg.matcher.peak_separation_m / 2))
 
     def _contradicted(self, t: float, fix: Fix) -> bool:
         """Whether matches the untrusted track rejects keep pointing to one other place."""
         cfg, w = self.cfg, self.window
         recent = [(s, o) for s, o in self._rejected if t - s <= cfg.contradiction_window_s]
         self._rejected = [*recent, (t, np.array([fix.x, fix.y]) - w.pose[:2])]
-        if len(self._rejected) < cfg.contradiction_matches or self._trusted(w):
-            return False
-        offsets = np.array([o for _, o in self._rejected])
-        spread = np.hypot(*(offsets - np.median(offsets, axis=0)).T)
-        return bool(np.all(spread <= cfg.matcher.peak_separation_m / 2))
+        return not self._supported(w) and self._disputed(t)
 
     def _lose(self) -> None:
         """Stop matching around the track, but keep dead reckoning it."""
