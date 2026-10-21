@@ -17,8 +17,9 @@ position is reported as trusted only when independent evidence supports it.
 | River valley survey, fixed-wing, 15 min | 87% | 47% | 2 frames, just past 25 m |
 
 *Share of the flight with a trusted position within 25 m of GPS, from the
-video alone.* In simulation, 16 of 17 scenarios (from snow, dusk haze and
-spring clouds to Irish bog and 200 m uplands) never trust a wrong position.
+video alone.* In simulation, none of 27 scenarios (from snow, dusk haze and
+spring clouds to Irish bog, 200 m uplands, a frozen video link and GNSS
+jammed at 50 m) trusts a wrong position.
 
 ![Flight 1: pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
 
@@ -45,7 +46,12 @@ videos with DJI `.SRT` telemetry, or a built-in demo flight. Telemetry
 comes from MAVLink (ArduPilot/PX4), DJI subtitle files or manual entry;
 recorded footage can also pair with an ArduPilot log. When
 the aircraft reports GPS, it is drawn next to the visual estimate, so every
-real flight measures accuracy. Setup for each source is in
+real flight measures accuracy. With **Start from GPS**, a feed begins from
+the aircraft's GPS position and velocity at takeoff and never uses GPS
+again, so later jamming or spoofing cannot pull it away; the **GNSS check**
+then flags a receiver that keeps a confident fix while drifting further from
+pharos's trusted position than both uncertainties allow, as a spoofed one
+does. Setup for each source is in
 [docs/laptop.md](docs/laptop.md).
 
 ## Analyze recorded footage
@@ -67,6 +73,19 @@ then cached) and turns them into heights above the ground. It finds the
 takeoff point in telemetry that starts on the ground; otherwise give it with
 `--takeoff LAT LON`, or pharos learns it from its first confirmed position.
 `--dem` uses another elevation model and `--no-terrain` none.
+
+When GNSS was good at the start of the footage and lost later (jammed, or
+cut off on purpose), `--known-start SIGMA_M` begins from the first fixes, as
+from the last ones before jamming: the position, known to within `SIGMA_M`
+metres, and the velocity. GNSS is never used after that, only to score.
+Footage that starts in mid-air reads its heights from a takeoff point it
+never saw (a long DJI video split into parts does this); from a known start,
+pharos then learns the true height from the first 3 s, by comparing the
+ground odometry crosses with the distance the GNSS speed says it flew.
+
+```bash
+pharos analyze DJI_0043.MP4 --map area.tif --hfov 70 --known-start 5
+```
 
 A separate camera and an autopilot log share no clock; `pharos sync` finds
 the offset from the footage alone. On a flight with GNSS, `pharos probe`
@@ -133,32 +152,43 @@ format.
 
 ## Benchmark
 
-Seventeen scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight at
-180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s at
-110 m with a 16:9 camera) over a 1.6 km × 1.6 km world,
-localized at 2 Hz from a cold start (no initial position) against a summer
-reference map:
+Twenty-seven scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
+at 180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s
+at 110 m with a 16:9 camera, and the ten `stress_` ones as their files say)
+over a 1.6 km × 1.6 km world, localized at 2 Hz against a summer
+reference map, from a cold start (no initial position) except where a stress
+scenario starts from a last GNSS fix:
 
 <!-- bench:start -->
 | scenario | avail | fix s | err50 m | err95 m | hdg deg | cover | mislead | gap s | in 3 sd | ms/frame |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.3 | 3.2 | 0.2 | 84% | 0.0% | 10 | 100% | 369 |
-| autumn_low_sun | 85% | 9.0 | 1.9 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 400 |
-| dusk_haze | 73% | 9.5 | 1.8 | 14.2 | 0.5 | 72% | 0.8% | 10 | 97% | 435 |
-| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 362 |
-| hills | 84% | 9.5 | 1.1 | 2.0 | 0.3 | 84% | 0.0% | 10 | 100% | 277 |
-| ireland_bog_coast | 90% | 11.5 | 1.1 | 2.4 | 0.6 | 90% | 0.0% | 12 | 100% | 341 |
-| ireland_pasture | 90% | 11.5 | 1.1 | 2.9 | 0.4 | 90% | 0.0% | 12 | 100% | 280 |
-| ireland_uplands | 77% | 27.5 | 0.9 | 2.0 | 0.5 | 77% | 0.0% | 28 | 100% | 307 |
-| kitchen_sink | 48% | 31.5 | 1.8 | 3.5 | 0.3 | 48% | 0.0% | 32 | 100% | 394 |
-| land_change | 84% | 9.5 | 2.3 | 4.1 | 0.1 | 84% | 0.0% | 10 | 100% | 358 |
-| no_compass_spinning | 84% | 9.5 | 2.1 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 349 |
-| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 331 |
-| sensor_errors | 84% | 9.5 | 7.1 | 9.1 | 0.4 | 84% | 0.0% | 10 | 100% | 364 |
-| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.5 | 0.3 | 56% | 0.0% | 17 | 100% | 366 |
-| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 434 |
-| valley | 83% | 10.0 | 1.1 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 343 |
-| winter_snow | 86% | 8.5 | 1.5 | 3.0 | 0.1 | 86% | 0.0% | 8 | 100% | 299 |
+| altitude_bias | 84% | 9.5 | 1.3 | 3.1 | 0.2 | 84% | 0.0% | 10 | 100% | 211 |
+| autumn_low_sun | 85% | 9.0 | 1.8 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 267 |
+| dusk_haze | 73% | 8.5 | 1.7 | 13.7 | 0.4 | 73% | 0.0% | 8 | 99% | 261 |
+| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 266 |
+| hills | 84% | 9.5 | 1.0 | 2.0 | 0.2 | 84% | 0.0% | 10 | 100% | 179 |
+| ireland_bog_coast | 90% | 11.5 | 1.1 | 2.5 | 0.2 | 90% | 0.0% | 12 | 100% | 223 |
+| ireland_pasture | 90% | 11.5 | 1.1 | 2.4 | 0.2 | 90% | 0.0% | 12 | 100% | 176 |
+| ireland_uplands | 75% | 29.5 | 1.0 | 1.9 | 0.1 | 75% | 0.0% | 30 | 100% | 165 |
+| kitchen_sink | 48% | 31.5 | 1.9 | 3.7 | 0.2 | 48% | 0.0% | 32 | 100% | 240 |
+| land_change | 84% | 9.5 | 2.3 | 4.1 | 0.1 | 84% | 0.0% | 10 | 100% | 176 |
+| no_compass_spinning | 84% | 9.5 | 2.1 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 228 |
+| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 178 |
+| sensor_errors | 84% | 9.5 | 7.1 | 9.1 | 0.4 | 84% | 0.0% | 10 | 100% | 203 |
+| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.6 | 0.3 | 56% | 0.0% | 17 | 100% | 190 |
+| stress_descent | 90% | 11.5 | 1.5 | 6.0 | 0.5 | 90% | 0.0% | 12 | 100% | 134 |
+| stress_gnss_lost_low | 75% | 5.0 | 2.0 | 14.0 | 0.6 | 75% | 0.0% | 22 | 100% | 93 |
+| stress_hover | 90% | 11.5 | 1.3 | 3.4 | 0.3 | 90% | 0.0% | 12 | 100% | 197 |
+| stress_map_offset | 90% | 11.5 | 9.5 | 10.7 | 0.2 | 90% | 0.0% | 12 | 100% | 192 |
+| stress_midflight | 85% | 9.0 | 1.0 | 1.7 | 0.2 | 85% | 0.0% | 9 | 100% | 164 |
+| stress_off_map | 47% | 11.5 | 1.1 | 2.6 | 0.1 | 47% | 0.0% | 53 | 100% | 203 |
+| stress_rain | 90% | 11.5 | 1.1 | 2.9 | 0.2 | 90% | 0.0% | 12 | 100% | 169 |
+| stress_telemetry | 55% | 11.5 | 1.3 | 6.3 | 0.2 | 55% | 0.0% | 44 | 100% | 201 |
+| stress_tide | 90% | 11.5 | 1.1 | 2.5 | 0.2 | 90% | 0.0% | 12 | 100% | 227 |
+| stress_video | 87% | 11.5 | 1.2 | 3.1 | 0.2 | 87% | 0.0% | 12 | 100% | 184 |
+| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 233 |
+| valley | 83% | 10.0 | 1.1 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 176 |
+| winter_snow | 86% | 8.5 | 1.5 | 3.0 | 0.1 | 86% | 0.0% | 8 | 100% | 182 |
 <!-- bench:end -->
 
 Columns: share of frames trusted (`tracking`), time to first confirmed
@@ -166,12 +196,14 @@ fix, median and 95th-percentile error of trusted positions, median heading
 error, accurate coverage (trusted and within 25 m) and the misleading rate
 (trusted and further off), both over all frames, the longest stretch without
 a trusted position, the share of trusted positions within three reported
-sigmas, and median processing time per frame on a loaded 4-core CPU.
+sigmas, and median processing time per frame on a 4-core CPU running three
+scenarios at once.
 
-Reported uncertainties hold, and only one frame in the whole benchmark is
-trusted and wrong: in `dusk_haze`, low sun shifts shadow edges into a run of
-strong matches 20 m off, and the track follows them to 26 m with an 8 m
-sigma. Coverage tops out near 85% because a candidate must cover 120 m of new
+Reported uncertainties hold, and no frame in the whole benchmark is trusted
+and wrong. The closest is `dusk_haze`, where low sun shifts shadow edges into
+a run of strong matches 20 m off and the track follows them part of the way
+(95th percentile error 14 m, 99% of trusted positions within three sigmas).
+Coverage tops out near 85% because a candidate must cover 120 m of new
 ground (about 10 s) before it is trusted. Lower rows report the missing
 frames as coasting, not wrong: in `spring_clouds_on_map`, `kitchen_sink` and
 `dusk_haze`, clouds on the map, haze and forest leave stretches where too
@@ -211,6 +243,34 @@ the 67% world coasted for a stretch), uplands 77 to 90% (mean 86%). The
 uplands are the hard case for the search without a position, over relief:
 there the previous search covered 60 to 90% (mean 82%), and its two
 hardest worlds rose from 60 and 72% to 77 and 80%.
+
+**When things go wrong.** Ten `stress_` scenarios, mostly over Irish
+pasture, put a flight through what goes wrong in practice. A rain-spotted
+lens (`stress_rain`), a coast at another tide than the map (`stress_tide`,
+the shoreline 15 m inland), hovers of 20 and 10 s (`stress_hover`) and a descent
+from 110 to 45 m after the first fix (`stress_descent`) each still cover
+90%. A map georeferenced 10 m off (`stress_map_offset`) shifts every match
+alike, which no matching can reveal: the error is the offset, and the 10 m
+sigma still covers it. A telemetry dropout plus a compass pulled 45° off by
+power lines for 15 s (`stress_telemetry`) cost 44 s of trust but nothing
+wrong, and a flight that leaves a map cut too small for 42 s
+(`stress_off_map`) coasts off it and re-locks about 8 s after it returns.
+Two start from a last GNSS fix known to 10 m: GNSS jammed at 50 m
+(`stress_gnss_lost_low`), and a flight joined in mid-air 80 m over hills
+with heights read from a takeoff point 40 m off that ground
+(`stress_midflight`), where the height learned from the speed gives 85%.
+Two of them caught real faults. A frozen video link (`stress_video`)
+repeats its last picture while the aircraft flies on; matched, that picture
+held the trusted track 35 m behind with a 6 m sigma (7.4% of frames
+misleading), so exact repeats are now neither matched nor used for odometry
+(87% covered, none misleading). Low over pasture, odometry reads about 18%
+short, and in `stress_gnss_lost_low` a trusted track drifted 20 to 28 m off
+while it rejected true matches 1 to 3 m from the truth as too far from it
+(2.5% misleading); a trusted track that keeps turning down matches agreeing
+on one place now reports itself as coasting (none misleading, 75% covered).
+On six real-flight runs (PinPoint 1 and 2, cold and from a known start, and
+BAMBI) the second change altered the status of 3 live frames out of about
+9,000 and nothing after the flight.
 
 The simulator is still kinder than reality: the map and the drone view share
 exact geometry, and the localizer knows the very terrain the frames were
@@ -276,18 +336,24 @@ steps in banks honest: flight 2's read 2.5% long and now 0.8%, flight 1's
 **A DJI video.** The *BAMBI* wildlife dataset (Zenodo, CC BY 4.0) publishes
 raw DJI recordings with their `.SRT` files. One 6-minute DJI Mavic 3T segment
 (4K, gimbal straight down, Styria) was run against Austria's free basemap.at
-orthophoto. The DJI path works end to end, and pharos never reported a wrong
-position, but it never confirmed one either: the survey flew 55 m above the
-ground (each frame sees about 70 × 40 m), mostly over continuous autumn forest
-and harvested fields against a summer map, and the true location stood out in
-only 12% of frames. It also showed that DJI's `rel_alt` is height above
+orthophoto. The survey flew 55 m above the ground (each frame sees about
+70 × 40 m), mostly over continuous autumn forest and harvested fields
+against a summer map, and the true location stood out in only 12% of
+frames. From a cold start pharos never confirmed a position on it, nor
+reported a wrong one, even given Airdata's heights. It also showed that DJI's `rel_alt` is height above
 takeoff even on terrain-following missions: it read 46 to 112 m, a median
 42 m too high, while the drone held 50 to 63 m above the ground. With the
-Copernicus terrain model pharos now brings that to within 3.5 m (median) of
+Copernicus terrain model pharos brings that to within 3.5 m (median) of
 Airdata's height above ground, most of the rest being forest canopy, which
-the camera sees too. Given Airdata's heights, pharos confirmed no position
-either, so what holds this footage back is its height, forest and season,
-not its telemetry. See
+the camera sees too.
+
+The segment starts in mid-air, so it is also the case `--known-start` is
+for: GNSS good at the start and lost after. From the first fixes (5 m), with
+the raw `rel_alt` and the height learned from the speed, pharos covered 67%
+of the 6 minutes after the flight and 63% live, median error 1.7 m (live
+1.9 m, 95th percentile 2.3 m and 8.7 m), with no trusted position wrong and
+every position, trusted or coasting, within three sigmas; it had a position
+within 25 m in 93% of frames. See
 [docs/data.md](docs/data.md#from-real-hardware) for how to fly and record
 for pharos.
 
@@ -379,7 +445,15 @@ to about 6 m).
   threshold (flight 2 misleading 6.3%); counting nearby matches as only
   partly correlated (more coverage, but look-alike runs back: flight 1
   misleading 0.4% to 0.9%); full confirmation for a place that
-  contradicted a coasting track (flight 2 live coverage 40% to 21%).
+  contradicted a coasting track (flight 2 live coverage 40% to 21%);
+  keeping a lost track's place open for 300 s instead of 60 s (no gain
+  across two samples of flight 2); a higher score floor for matches (0.25
+  instead of 0.18: on real footage it cut look-alikes passing a candidate's
+  local check from 5 to 11% to about 1.5%, but whole runs did not improve and
+  the simulator lost coverage); letting a strongly scoring match count with
+  less margin over its search window around a trusted track (better on
+  flight 2, but on the BAMBI flight it took a match 10.6 m off during an
+  odometry drift and trusted 0.7% of live frames wrongly; it stays an option, `track_strong_score`, off by default).
 
 ## Next steps
 
@@ -391,6 +465,12 @@ to about 6 m).
   longer template did not help in simulation (no change over pasture, mixed
   to worse over uplands); learned features behind the `Matcher` protocol are
   the next lever.
+* **A first position from low down.** At 40 m a cold start takes 45 to 60 s
+  in simulation, against none from a known start: wrong candidates fill
+  every slot and the true one, which the global search keeps finding again,
+  is dropped. Two options aim at this (`evict_stale`, `refound_distinct`,
+  off by default) and still need whole-flight runs. Odometry also reads
+  about 18% short at 50 m.
 * **An Irish flight.** The Irish scenarios are simulated. The test that
   counts is a real flight over Irish pasture or bog against a free map of
   it, which in Ireland means surveying the area once yourself (see
