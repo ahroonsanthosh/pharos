@@ -124,3 +124,94 @@ def test_overcast_light_casts_no_shadows():
     flat = render(world, Look(sun_elevation_deg=90, overcast=1.0)).astype(float)
     # with no direct light the sun's position no longer matters
     assert np.abs(grey - flat).mean() < 0.3 * np.abs(sunny - flat).mean()
+
+
+def _roof_scene(roof_height):
+    """A white 6 m square roof 15 m east of a camera 40 m up, over grey ground."""
+    from pharos.geomap import GeoMap
+    from pharos.geometry import Camera
+    from pharos.sim.flight import render_frame
+    from pharos.sim.scenario import CameraSpec
+    from pharos.types import GroundTruth
+
+    image = np.full((200, 200, 3), 90, np.uint8)
+    image[94:106, 124:136] = 250  # x 12..18 m, y -3..3 m at 0.5 m per pixel, origin centred
+    ground = GeoMap(image, 0.5, origin_x=-49.75, origin_y=49.75)
+    heights = np.zeros((200, 200), np.float32)
+    heights[94:106, 124:136] = roof_height
+    camera = Camera.from_fov(320, 320, 80)
+    spec = CameraSpec(blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0)
+    pose = GroundTruth(0.0, 0.0, 0.0, 40.0, 0.0)
+    frame = render_frame(ground, camera, pose, spec, np.random.default_rng(0), heights=heights)
+    v, u = np.nonzero(frame[..., 1] > 200)
+    return np.hypot(u.mean() - camera.cx, v.mean() - camera.cy)
+
+
+def test_tall_objects_lean_outwards_in_low_frames():
+    """A roof 10 m up, seen from 40 m, sits 40/30 times further from the image centre."""
+    flat, tall = _roof_scene(0.0), _roof_scene(10.0)
+    assert tall / flat == pytest.approx(40 / 30, rel=0.05)
+
+
+def test_fine_texture_shows_only_where_frames_resolve_it():
+    from pharos.geomap import GeoMap
+    from pharos.geometry import Camera
+    from pharos.sim.flight import render_frame
+    from pharos.sim.scenario import CameraSpec
+    from pharos.types import GroundTruth
+
+    ground = GeoMap(np.full((400, 400, 3), 120, np.uint8), 0.5, origin_x=-100, origin_y=100)
+    camera = Camera.from_fov(320, 240, 80)
+    spec = CameraSpec(blur=0, motion_blur_px=0, noise=0, vignetting=0, exposure_jitter=0)
+
+    def detail(altitude, texture):
+        pose = GroundTruth(0.0, 0.0, 0.0, altitude, 0.0)
+        frame = render_frame(ground, camera, pose, spec, np.random.default_rng(0), texture=texture)
+        return float(frame[60:180, 80:240, 1].std())
+
+    assert detail(30.0, 0.1) > 4 * max(detail(30.0, 0.0), 0.5)  # 10 cm per pixel: grass shows
+    assert detail(30.0, 0.1) > 2 * detail(150.0, 0.1)  # 50 cm per pixel: the image has it all
+
+
+def test_stress_effects_happen_where_asked():
+    """Frozen and lost video, stale telemetry, a pulled compass, a shifted and cut map."""
+    from pharos.sim.flight import simulate
+    from pharos.sim.scenario import CameraSpec, Scenario, TelemetrySpec
+
+    base = Scenario(
+        seed=5,
+        world=WorldSpec(size_m=700, villages=1, buildings_per_village=10),
+        trajectory=TrajectorySpec(duration_s=12, margin_m=170, altitude=150),
+        camera=CameraSpec(width=320, height=240),
+    )
+    plain_map, plain = simulate(base)
+    sc = replace(
+        base,
+        camera=replace(base.camera, freezes=((2.0, 2.0),), dropped=((6.0, 1.5),)),
+        telemetry=TelemetrySpec(dropouts=((8.0, 2.0),), compass_jumps=((4.0, 2.0, 40.0),)),
+        map_shift_m=(7.0, -3.0),
+        map_crop_m=(0.0, 0.0, 0.0, 250.0),
+    )
+    geomap, rec = simulate(sc)
+    t = [f.t for f in rec.frames]
+    assert not any(6.0 <= x < 7.5 for x in t) and len(rec.truth) == len(rec.frames)
+    frozen = [f for f in rec.frames if 2.0 <= f.t < 4.0]
+    assert all(np.array_equal(f.image, frozen[0].image) for f in frozen)
+    stale = [f.telemetry for f in rec.frames if 7.5 <= f.t < 10.0]
+    assert all(s == stale[0] for s in stale)
+    pulled = {f.t: f.telemetry.yaw for f in rec.frames}
+    calm = {f.t: f.telemetry.yaw for f in plain.frames}
+    jump = np.degrees(np.angle(np.exp(1j * (pulled[4.5] - calm[4.5]))))
+    assert jump == pytest.approx(40.0, abs=5.0)
+    assert geomap.origin_x - plain_map.origin_x == pytest.approx(7.0)
+    assert plain_map.origin_y - geomap.origin_y == pytest.approx(253.0)
+    assert plain_map.shape[0] - geomap.shape[0] == round(250.0 / geomap.gsd)
+    assert any(not geomap.contains(g.x, g.y) for g in rec.truth)  # flown off the map
+
+
+def test_tide_moves_the_shoreline():
+    w = generate_world(replace(SPEC, coast=0.3, size_m=400), 3)
+    sea = np.mean(w.cover == Cover.WATER)
+    high = apply_changes(w, ChangeSpec(replant=0.0, tide_m=10.0), 1)
+    low = apply_changes(w, ChangeSpec(replant=0.0, tide_m=-10.0), 1)
+    assert np.mean(low.cover == Cover.WATER) < sea < np.mean(high.cover == Cover.WATER)

@@ -1,0 +1,5 @@
+# The map was cut too small: over Irish pasture, the flight leaves it for 40 s (from
+# about 40 s in) over ground the map does not show, then comes back.
+base: ireland_pasture
+name: stress_off_map
+map_crop_m: [0, 0, 0, 400]

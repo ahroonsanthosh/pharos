@@ -24,17 +24,30 @@ def analyze(
     cfg: LocalizerConfig | None = None,
     progress=None,
     smooth: bool = True,
+    known_start_m: float | None = None,
 ) -> list[dict]:
     """One record per frame (see :func:`pharos.eval.export.record`).
 
     Recorded footage need not be localized causally: with ``smooth`` the positions
     come from one solve over the whole flight, so gaps are bridged from both sides.
     Each record then keeps what a live run would have reported under ``causal``.
+    With ``known_start_m`` the second frame's GNSS position (known to within that many
+    metres) and the velocity from the first two are given to the localizer, as the
+    last fixes before jamming would be.
     """
     takeoff = geomap.from_latlon(*footage.takeoff) if footage.takeoff else None
     localizer = Localizer(geomap, footage.recording.camera, cfg, takeoff=takeoff)
+    if known_start_m is not None and (len(footage.gnss) < 2 or None in footage.gnss[:2]):
+        raise ValueError("a known start needs GNSS at the first two frames")
     records, telemetry = [], []  # telemetry as reported and as used (height above ground)
+    last = None  # (time, position) of the previous frame's GNSS
     for i, (frame, gnss) in enumerate(zip(footage.recording, footage.gnss, strict=True)):
+        if known_start_m is not None and i < 2:  # the last two fixes before GNSS was lost
+            xy = np.array(geomap.from_latlon(*gnss))
+            if last is not None and frame.t > last[0]:
+                velocity = (xy - last[1]) / (frame.t - last[0])
+                localizer.start_at(xy, known_start_m, velocity=tuple(velocity))
+            last = (frame.t, xy)
         estimate = localizer.process(frame)
         telemetry.append((frame.telemetry, localizer.log[-1]["tel"]))
         reported, used = telemetry[-1]

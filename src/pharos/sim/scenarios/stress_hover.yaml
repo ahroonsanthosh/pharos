@@ -1,0 +1,5 @@
+# Over Irish pasture, the aircraft stops and hovers for 20 s, then flies on: no new
+# ground for odometry or matching, and wind drift the camera barely shows.
+base: ireland_pasture
+name: stress_hover
+trajectory: {hover: [[30, 20], [80, 10]]}

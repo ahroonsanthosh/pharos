@@ -1,0 +1,5 @@
+# The telemetry link drops for 6 s (the last reading repeats), and flying past power
+# lines pulls the compass 45 degrees off for 15 s.
+base: ireland_pasture
+name: stress_telemetry
+telemetry: {dropouts: [[30, 6]], compass_jumps: [[50, 15, 45]]}

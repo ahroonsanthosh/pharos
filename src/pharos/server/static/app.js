@@ -111,6 +111,9 @@ function renderDetails(feed) {
   } else if (feed.state !== "running") {
     status.className = `status ${last?.status ?? "lost"}`;
     status.textContent = feed.state === "starting" ? "starting…" : `${feed.state} · ${last?.status ?? "no frames"}`;
+  } else if (last?.gnss_check === "disagrees") {
+    status.className = "status error";
+    status.textContent = `${last.status} · GNSS disagrees by ${fmt(last.error_m, 0, " m")}: possible spoofing`;
   } else {
     status.className = `status ${last?.status ?? "lost"}`;
     status.textContent = last?.status ?? "waiting for frames";
@@ -124,6 +127,7 @@ function renderDetails(feed) {
     ["Height (reported)", fmt(last?.altitude_m, 1, " m")],
     ["Camera tilt", fmt(last?.tilt_deg, 1, "°")],
     ["Error vs GNSS", fmt(last?.error_m, 1, " m")],
+    ["GNSS check", last?.gnss_check ?? "–"],
     ["Frames", String(state.records.length)],
     ["Processing", fmt(last?.latency_ms, 0, " ms")],
   ];
@@ -323,6 +327,7 @@ async function buildSpec() {
     tilt_deg: +f.tilt_deg.value,
     mount: f.mount.value,
     video_delay_s: +f.video_delay_s.value,
+    start_from_gnss: f.start_from_gnss.checked,
   };
   if (!spec.map) throw new Error("Upload or choose a map first.");
   if (spec.telemetry === "mavlink") spec.telemetry = `mavlink:udpin:0.0.0.0:${f.mavlink_port.value}`;

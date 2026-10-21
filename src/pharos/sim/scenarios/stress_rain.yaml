@@ -1,0 +1,6 @@
+# Irish rain: five drops stuck on the lens blur the same parts of every frame, under
+# grey light and haze.
+base: ireland_pasture
+name: stress_rain
+camera: {raindrops: 5}
+flight_look: {haze: 0.25}

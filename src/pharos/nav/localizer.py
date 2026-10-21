@@ -38,6 +38,7 @@ from pharos.geomap import GeoMap
 from pharos.geometry import Camera, rot2, wrap_angle
 from pharos.nav.filter import FilterConfig, PoseFilter
 from pharos.nav.window import PoseWindow, WindowConfig
+from pharos.telemetry import ON_GROUND_M
 from pharos.types import Estimate, Fix, Frame, HeightField, Status, Telemetry
 from pharos.vision.matcher import (
     CorrelationMatcher,
@@ -74,6 +75,12 @@ class LocalizerConfig:
     init_min_score: float = 0.25
     init_min_distinctiveness: float = 0.1  # a winner must once have stood out map-wide
     max_hypotheses: int = 4
+    # With every slot taken, a new candidate replaces the weakest one if that can no
+    # longer confirm (its mean score below init_min_score after confirm_frames frames).
+    evict_stale: bool = False
+    # A candidate the wide search finds again this many more times stands out map-wide
+    # even if no single search said so (0: only init_min_distinctiveness counts).
+    refound_distinct: int = 0
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
     # A lost track keeps dead reckoning. Acquisition then searches its 3-sigma region, and
@@ -86,6 +93,9 @@ class LocalizerConfig:
     wide_search_every: int = 3
     max_dead_reckoning_m: float = 2000.0  # beyond this 3-sigma radius, dead reckoning stops
     max_speed: float = 30.0  # m/s; faster odometry is a wrong fit
+    # A known start's speed against odometry over this long gives the height above the
+    # ground, when the heights are above a takeoff point not known.
+    height_from_speed_s: float = 3.0
     # Confirmation
     confirm_frames: int = 4
     confirm_distance_m: float = 120.0  # ground covered before a candidate can win
@@ -95,6 +105,10 @@ class LocalizerConfig:
     # A match must stand out from its window's noise. With the frame-sized template, 2 keeps
     # fewer chance peaks than 1.5 did with the disk and still finds more true ones.
     track_min_excess: float = 2.0
+    # A match standing out less still counts if it scores this well (inf: never). Low down
+    # a true match stands out less from its window, while decoys score lower.
+    track_strong_score: float = float("inf")
+    track_low_excess: float = 1.0
     max_coast_converging_s: float = 5.0  # a candidate dies after this long without a match
     # A confirmed track keeps searching around its prediction (reported as coasting) while
     # the window that needs stays within max_search_m, for up to max_coast_s. Longer coasts
@@ -147,6 +161,7 @@ class _Hypothesis:
     last_hit_xy: np.ndarray | None = None
     travelled: float = 0.0  # distance between matched positions, not dead reckoning
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
+    refound: int = 0  # times a later wide search found it again
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
     near_track: bool = False  # found where a lost track's dead reckoning puts the aircraft
     streak: int = 0  # consecutive matches
@@ -194,9 +209,14 @@ class Localizer:
         self._frames_in_state = 0
         self._last_t: float | None = None
         self._last_yaw: float | None = None
+        self._last_sample: np.ndarray | None = None  # of the previous image, to spot repeats
         self.window: PoseWindow | None = None
         self.dead_reckoning: PoseWindow | None = None  # a lost track's window, matches stopped
         self._lost_at = 0.0
+        self._airborne = False  # has left the ground (risen above takeoff)
+        self._start: tuple | None = None  # a known position to begin from (start_at)
+        self._start_motion: dict | None = None  # a known start's speed and odometry since
+        self._started: tuple | None = None  # (log index, pose, covariance) it began at
         self._rejected: list[tuple[float, np.ndarray]] = []  # (time, offset from the track)
         self._searches = 0  # acquisition searches since the loss
         self.odometry_scale = 1.0  # learned by the window, carried to the next track
@@ -215,8 +235,11 @@ class Localizer:
         belief = self._belief(frame.t) if self._height is not None else None
         frame = self._above_ground(frame, belief)
         fix = None
-        usable = usable_view(frame.telemetry, self.cfg)
-        matchable = matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame)
+        still = self._repeated(frame)  # a frozen video link: nothing new to see
+        usable = usable_view(frame.telemetry, self.cfg) and not still
+        matchable = (
+            matchable_view(frame.telemetry, self.cfg) and not self._rolling(frame) and not still
+        )
         self._motion = None
         if self.odometry is not None:
             if usable:
@@ -231,6 +254,135 @@ class Localizer:
         self.log.append({"t": frame.t, "tel": frame.telemetry, "motion": self._motion, "fix": None})
         for h in self.hypotheses:
             h.frames.append(len(self.log) - 1)
+        begins = self._start is not None  # a known position: a track begins at this frame
+        if begins:
+            self._begin(frame)
+        if self._start_motion is not None:
+            self._height_from_speed(frame)
+        if not begins:
+            fix = self._step(frame, matchable)
+        self._last_t = frame.t
+        self._last_yaw = frame.telemetry.yaw
+        return self._estimate(frame.t, fix, (time.perf_counter() - start) * 1e3)
+
+    def start_at(
+        self,
+        xy: tuple[float, float],
+        sigma_m: float = 5.0,
+        heading: float | None = None,
+        heading_sigma_deg: float | None = None,
+        velocity: tuple[float, float] | None = None,
+        velocity_sigma: float = 2.0,
+    ) -> None:
+        """Begin from a known position at the next frame, e.g. the last GNSS fix before
+        jamming: ``xy`` in world coordinates, ``sigma_m`` how far off it may be, and the
+        ground ``velocity`` (east, north, m/s) it had, if known.
+
+        Without ``heading`` the compass gives it. Without ``velocity`` the first step is
+        only bounded by the top speed: a fixed-wing starting in a bank, with no frame to
+        measure motion on, would otherwise seem to stand still. Within reach of a local search the
+        track starts at once (reported as coasting until matches support it);
+        otherwise, or with no heading at all, it starts as a lost track's dead
+        reckoning, whose region the acquisition searches.
+        """
+        speed = None if velocity is None else (*map(float, velocity), float(velocity_sigma))
+        self._start = (np.asarray(xy, float), float(sigma_m), heading, heading_sigma_deg, speed)
+
+    def _begin(self, frame: Frame) -> None:
+        cfg, tel = self.cfg, frame.telemetry
+        xy, sigma, heading, heading_sigma, velocity = self._start
+        self._start = None
+        if velocity is not None:
+            v = np.asarray(velocity[:2], float)
+            self._start_motion = {"t": frame.t, "xy": xy, "v": v, "sum": np.zeros(2), "from": None}
+        if heading is None and tel.yaw is not None:
+            heading = float(wrap_angle(tel.yaw + self.compass_offset))
+            heading_sigma = heading_sigma or cfg.window.compass_sigma_deg
+        known = heading is not None
+        sh = np.radians(heading_sigma or cfg.meas_heading_sigma_deg) if known else np.pi
+        pose = np.array([xy[0], xy[1], heading if known else 0.0])
+        cov = np.diag([sigma**2, sigma**2, sh**2])
+        w = PoseWindow(
+            cfg.window,
+            frame.t,
+            tel,
+            pose,
+            cov,
+            self.compass_offset,
+            self.odometry_scale,
+            start_velocity=velocity or (0.0, 0.0, cfg.max_speed / 2),
+        )
+        self._started = (len(self.log) - 1, pose, cov)
+        self.hypotheses, self._rejected, self._frames_in_state = [], [], 0
+        if known and cfg.search_sigmas * sigma <= cfg.max_search_m:
+            self.window, self.dead_reckoning = w, None
+            self.status, self._window_start = Status.TRACKING, frame.t
+        else:
+            self.window, self.dead_reckoning = None, w
+            self.status, self._lost_at, self._searches = Status.LOST, frame.t, 0
+
+    def _height_from_speed(self, frame: Frame) -> None:
+        """The height above the ground from a known start's ground speed.
+
+        A clip or feed that begins in mid-air reports heights above a takeoff point it
+        never shows, which may lie far below or above this ground (a DJI video split in
+        parts read 90 m over ground 55 m below it). Odometry measures its steps in
+        metres at the reported height; the start's speed says how far the aircraft
+        really went. Steps are added up over ``height_from_speed_s``, so that attitude
+        errors, metres at a time in a single step, count only at the two ends.
+        """
+        cfg, c = self.cfg, self._start_motion
+        tel, m, last_yaw = frame.telemetry, self._motion, self._last_yaw
+        if not tel.above_takeoff or self.takeoff_elevation is not None or tel.altitude <= 0:
+            self._start_motion = None
+            return
+        if m is None or self._last_t is None or last_yaw is None or tel.yaw is None:
+            if c["from"] is not None or frame.t - c["t"] > 1.0:
+                self._start_motion = None  # a gap in the steps, or none to begin with
+            return
+        if c["from"] is None:
+            c["from"], c["yaw"] = self._last_t, last_yaw
+        c["sum"] += rot2(last_yaw + self.compass_offset) @ m.d_body
+        span = frame.t - c["from"]
+        if span < cfg.height_from_speed_s:
+            return
+        self._start_motion = None
+        true = float(np.hypot(*c["v"])) * span
+        seen = float(np.hypot(*c["sum"]))
+        turned = abs(wrap_angle(tel.yaw - c["yaw"])) > np.radians(30)  # a chord, not the path
+        if true < 3.0 or turned or not 0.25 < true / max(seen, 1e-9) < 4.0:
+            return  # too slow to tell, turning, or odometry failed
+        k = true / seen
+        self._rescale_steps(c["from"], k)
+        if self.terrain is None:
+            self.scale *= k
+            return
+        height = k * self.scale * tel.altitude
+        ahead = footprint(self.camera, height, tel.pitch, tel.roll).center
+        here = c["xy"] + c["v"] * (frame.t - c["t"]) + rot2(tel.yaw + self.compass_offset) @ ahead
+        ground = self.terrain.at(here)
+        if not np.isfinite(ground):
+            self.scale *= k
+            return
+        self.takeoff_elevation = float(ground) + height - tel.altitude
+        self.scale = 1.0  # heights now follow the terrain, from that takeoff
+        self._height = self._height_field(tel)
+
+    def _rescale_steps(self, since: float, k: float) -> None:
+        """Odometry steps after ``since``, measured at a wrong height, ``k`` times longer."""
+        self._motion = replace(self._motion, d_body=self._motion.d_body * k)
+        for entry in self.log:
+            if entry["t"] > since and entry["motion"] is not None:
+                entry["motion"] = replace(entry["motion"], d_body=entry["motion"].d_body * k)
+        self.log[-1]["motion"] = self._motion
+        for w in (self.window, self.dead_reckoning):
+            for node in w.nodes if w is not None else ():
+                if node.t > since and node.motion is not None:
+                    node.motion = replace(node.motion, d_body=node.motion.d_body * k)
+
+    def _step(self, frame: Frame, matchable: bool) -> Fix | None:
+        """Track, acquire or converge on one frame; the match a track took, if any."""
+        fix = None
         if self.dead_reckoning is not None:
             self._dead_reckon(frame)
         if self.status is Status.TRACKING:
@@ -259,9 +411,7 @@ class Localizer:
             if self.status is Status.CONVERGING and not self.hypotheses:
                 self.status = Status.LOST
                 self._frames_in_state = 0
-        self._last_t = frame.t
-        self._last_yaw = frame.telemetry.yaw
-        return self._estimate(frame.t, fix, (time.perf_counter() - start) * 1e3)
+        return fix
 
     # -- acquisition and confirmation -------------------------------------
 
@@ -300,6 +450,7 @@ class Localizer:
             same = [h for h in self.hypotheses if self._same_place(h, f)]
             for h in same:
                 h.distinct = max(h.distinct, f.distinctiveness)
+                h.refound += 1
             if same or f.score < cfg.init_min_score:
                 continue
             self._candidate(f, frame.t, fast and bool(np.hypot(f.x - x, f.y - y) <= reach))
@@ -308,7 +459,14 @@ class Localizer:
         """Follow ``f`` (a match on the newest frame) as a candidate location."""
         cfg = self.cfg
         if len(self.hypotheses) >= cfg.max_hypotheses:
-            return
+            stale = [
+                h
+                for h in self.hypotheses
+                if len(h.scores) >= cfg.confirm_frames and h.mean_score < cfg.init_min_score
+            ]
+            if not (cfg.evict_stale and stale):
+                return
+            self.hypotheses.remove(min(stale, key=lambda h: h.mean_score))
         kf = PoseFilter(
             cfg.filter,
             f.x,
@@ -346,7 +504,10 @@ class Localizer:
             hits < needed
             or best.travelled < distance
             or best.mean_score < cfg.init_min_score
-            or best.distinct < cfg.init_min_distinctiveness
+            or not (
+                best.distinct >= cfg.init_min_distinctiveness
+                or 0 < cfg.refound_distinct <= best.refound
+            )
         ):
             return
         for other in self.hypotheses:
@@ -430,8 +591,7 @@ class Localizer:
         )
         fixes = self._match(frame, region)
         fix = fixes[0] if fixes else None
-        min_excess = cfg.track_min_excess + (0.0 if h.trusted else cfg.untrusted_extra_excess)
-        if fix is not None and (fix.score < cfg.track_min_score or fix.excess < min_excess):
+        if not self._accepts(fix, h.trusted, 0.0 if h.trusted else cfg.untrusted_extra_excess):
             fix = None
         if fix is not None:
             sigma_h = np.radians(cfg.meas_heading_sigma_deg)
@@ -519,9 +679,7 @@ class Localizer:
             )
             fixes = self._match(frame, region)
             fix = fixes[0] if fixes else None
-            if fix is not None and (
-                fix.score < cfg.track_min_score or fix.excess < cfg.track_min_excess
-            ):
+            if not self._accepts(fix, self._trusted(w)):
                 fix = None
             if fix is not None:
                 w.attach(fix)
@@ -541,21 +699,53 @@ class Localizer:
         self.compass_offset, self.odometry_scale = w.compass_offset, w.scale
         return fix
 
+    def _accepts(self, fix: Fix | None, trusted: bool, extra_excess: float = 0.0) -> bool:
+        """Whether a match stands out from its search window and scores well enough.
+
+        Scoring well can make up for standing out less only around a trusted position: a
+        track coasting off its course searches around the wrong place, where such a match
+        is the nearest look-alike (on flight 2 one 69 m off was taken that way).
+        """
+        cfg = self.cfg
+        if fix is None:
+            return False
+        clear = fix.excess >= cfg.track_min_excess + extra_excess
+        if fix.score >= cfg.track_min_score and clear:
+            return True
+        strong = trusted and fix.score >= cfg.track_strong_score
+        return strong and fix.excess >= cfg.track_low_excess + extra_excess
+
     def _trusted(self, w: PoseWindow) -> bool:
+        """Supported by matches, and not disputed by the ones it turned down."""
+        return self._supported(w) and not self._disputed(self.log[-1]["t"])
+
+    def _supported(self, w: PoseWindow) -> bool:
         cfg = self.cfg
         support = w.support(cfg.reconfirm_distance_m)
         return w.sigma() <= cfg.trust_sigma_m and support >= cfg.trust_support
+
+    def _disputed(self, t: float) -> bool:
+        """Whether matches the track turned down lately keep pointing to one other place.
+
+        Odometry that reads short makes a track drift while its sigma stays small, and it
+        then rejects the true matches as too far off: low over simulated pasture a
+        trusted track sat 20 to 28 m off for 6 s, turning down matches 1 to 3 m from the
+        truth. Such a track no longer claims trust; it does not jump to them either.
+        """
+        cfg = self.cfg
+        recent = [o for s, o in self._rejected if t - s <= cfg.contradiction_window_s]
+        if len(recent) < cfg.contradiction_matches:
+            return False
+        offsets = np.array(recent)
+        spread = np.hypot(*(offsets - np.median(offsets, axis=0)).T)
+        return bool(np.all(spread <= cfg.matcher.peak_separation_m / 2))
 
     def _contradicted(self, t: float, fix: Fix) -> bool:
         """Whether matches the untrusted track rejects keep pointing to one other place."""
         cfg, w = self.cfg, self.window
         recent = [(s, o) for s, o in self._rejected if t - s <= cfg.contradiction_window_s]
         self._rejected = [*recent, (t, np.array([fix.x, fix.y]) - w.pose[:2])]
-        if len(self._rejected) < cfg.contradiction_matches or self._trusted(w):
-            return False
-        offsets = np.array([o for _, o in self._rejected])
-        spread = np.hypot(*(offsets - np.median(offsets, axis=0)).T)
-        return bool(np.all(spread <= cfg.matcher.peak_separation_m / 2))
+        return not self._supported(w) and self._disputed(t)
 
     def _lose(self) -> None:
         """Stop matching around the track, but keep dead reckoning it."""
@@ -573,7 +763,8 @@ class Localizer:
             self.dead_reckoning = None
 
     def smooth(self) -> list[Estimate]:
-        """Whole-flight solve over every frame since the first confirmed track (recorded footage).
+        """Whole-flight solve over every frame since the first confirmed track, or the
+        known position it began from (recorded footage).
 
         Frames before the first confirmation keep their causal estimates. A frame is
         trusted with a small smoothed uncertainty and enough independent inlier matches
@@ -582,19 +773,24 @@ class Localizer:
         cfg, log = self.cfg, self.log
         estimates = [e["estimate"] for e in log]
         start = next((i for i, e in enumerate(log) if e["fix"] is not None), None)
-        if start is None:
+        if self._started is not None and (start is None or self._started[0] <= start):
+            start, pose, cov = self._started  # from the known position
+        elif start is None:
             return estimates
-        f0 = log[start]["fix"]
+        else:
+            f0 = log[start]["fix"]
+            pose, cov = np.array([f0.x, f0.y, f0.heading]), np.diag([100.0, 100.0, 0.05])
         w = PoseWindow(
             replace(cfg.window, span_s=float("inf")),
             log[start]["t"],
             log[start]["tel"],
-            np.array([f0.x, f0.y, f0.heading]),
-            np.diag([100.0, 100.0, 0.05]),
+            pose,
+            cov,
             self.compass_offset,
             self.odometry_scale,
         )
-        w.attach(f0)
+        if log[start]["fix"] is not None:
+            w.attach(log[start]["fix"])
         for e in log[start + 1 :]:
             est = e["estimate"]
             guess = None  # start from the causal estimate where there is one
@@ -652,15 +848,39 @@ class Localizer:
         return height
 
     def _above_ground(self, frame: Frame, belief) -> Frame:
-        """The frame with its height above the ground at the most likely position, if known."""
-        if belief is None:
-            return frame
-        xy, heading, spread = belief
+        """The frame with its height above the ground at the most likely position, if known.
+
+        With no position yet, a height above takeoff is kept, unless the aircraft has
+        left the ground and now reads too low to use: one that took off on a hill may
+        read 0 m over a valley while 60 m above it. It then takes the typical height
+        above the ground of where it may be.
+        """
         tel = frame.telemetry
+        if tel.above_takeoff and tel.altitude > ON_GROUND_M:
+            self._airborne = True
+        if belief is None:
+            low = tel.altitude < self.cfg.min_altitude_m
+            if self._height is None or not self._airborne or not low:
+                return frame
+            h = self._height(self._anywhere())
+            if not np.isfinite(h).any():  # underground wherever it may be
+                return frame
+            height = float(np.nanmedian(h))
+            return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+        xy, heading, spread = belief
         height = view_height(self._height, self.camera, tel, xy, heading, spread)
         if not height > 0:  # the belief would put it underground
             return frame
         return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+
+    def _anywhere(self) -> np.ndarray:
+        """Points spread over where the aircraft may be: the prior region, or the map."""
+        x0, y0, x1, y1 = self.map.extent
+        if (c := self.cfg.prior_center) is not None and np.isfinite(r := self.cfg.prior_radius_m):
+            x0, y0 = max(x0, c[0] - r), max(y0, c[1] - r)
+            x1, y1 = min(x1, c[0] + r), min(y1, c[1] + r)
+        gx, gy = np.meshgrid(np.linspace(x0, x1, 32), np.linspace(y0, y1, 32))
+        return np.stack([gx, gy], -1).reshape(-1, 2)
 
     def _relief(self, frame: Frame, belief) -> Relief | None:
         """The terrain around the most likely position, for odometry to project onto."""
@@ -703,6 +923,18 @@ class Localizer:
             return False
         dt = frame.t - self.log[-1]["t"]
         return dt <= 0 or abs(tel.tilt - last.tilt) / dt > np.radians(cfg.rolling_deg_s)
+
+    def _repeated(self, frame: Frame) -> bool:
+        """Whether the frame repeats the previous image exactly.
+
+        A video link that stalls keeps delivering its last picture while the aircraft
+        flies on: matched, it holds the track back at the place it shows, and odometry
+        reads it as standing still. A camera never repeats itself to the bit (its noise
+        sees to that), so an exact repeat is not a new view. Every 8th pixel is compared.
+        """
+        sample = np.ascontiguousarray(frame.image[::8, ::8])
+        last, self._last_sample = self._last_sample, sample
+        return last is not None and np.array_equal(sample, last)
 
     def _plausible(self, m: Motion | None, t: float) -> Motion | None:
         """Odometry, unless it implies an impossible speed (RANSAC on a wrong cluster)."""

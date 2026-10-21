@@ -56,6 +56,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--causal", action="store_true", help="only what a live run would report (no smoothing)"
     )
+    p.add_argument(
+        "--known-start",
+        type=float,
+        metavar="SIGMA_M",
+        help="begin from the first GNSS fixes (position known to within SIGMA_M metres, "
+        "and velocity), as from the last ones before jamming; with heights above an "
+        "unknown takeoff, the speed also gives the height. GNSS is otherwise only used "
+        "to score",
+    )
     p.add_argument("-c", "--config", type=Path, help="localizer YAML overrides")
     p.add_argument("-o", "--out", type=Path, required=True)
     p.set_defaults(func=_analyze)
@@ -213,7 +222,9 @@ def _analyze(args) -> None:
         print(f"\r{i}/{n} {rec['status']:<10}{err}      ", end="", flush=True)
 
     cfg = _with_map_accuracy(_config(args.config), args.map_accuracy)
-    records = analyze(footage, geomap, cfg, progress, smooth=not args.causal)
+    records = analyze(
+        footage, geomap, cfg, progress, smooth=not args.causal, known_start_m=args.known_start
+    )
     print()
     summary = write_outputs(records, geomap, args.out, args.footage.name)
     print(json.dumps(summary, indent=2))

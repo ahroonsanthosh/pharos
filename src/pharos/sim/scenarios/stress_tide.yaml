@@ -1,0 +1,4 @@
+# The west coast at a different tide than the map: the shoreline has moved 15 m inland.
+base: ireland_bog_coast
+name: stress_tide
+changes: {tide_m: 15}

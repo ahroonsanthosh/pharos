@@ -67,6 +67,12 @@ class WorldSpec:
     # straight drains), and sea over this share of the map behind a ragged coast.
     bog_fraction: float = 0.0
     coast: float = 0.0
+    # Hedges, trees and buildings stand this tall in the frames (surface_height), so a low
+    # camera sees their tops lean outwards and their sides; the map shows them from above.
+    object_heights: bool = False
+    # Contrast of detail finer than the world image (grass, gravel, crop stubble), fixed
+    # to the ground: what frames from low down resolve and the map does not.
+    fine_texture: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,7 @@ class ChangeSpec:
     buildings_added: int = 0
     forest_cleared: float = 0.0  # fraction of forest parcels felled
     flooded: float = 0.0  # fraction of fields with standing water in their low corners
+    tide_m: float = 0.0  # the shoreline moved this far inland (out to sea if negative)
 
 
 @dataclass(frozen=True)
@@ -205,6 +212,20 @@ def generate_world(spec: WorldSpec, seed: int) -> World:
     )
 
 
+def surface_height(world: World) -> np.ndarray:
+    """Height in metres of what stands on the ground: hedges 2.5 to 5 m, tree crowns 10
+    to 20 m (varying with the crown texture), buildings their own height; 0 elsewhere."""
+    lo, hi = np.percentile(world.canopy, [2, 98])
+    crown = np.clip((world.canopy - lo) / max(hi - lo, 1e-6), 0.0, 1.0).astype(np.float32)
+    h = np.zeros(world.cover.shape, np.float32)
+    hedge, forest = world.cover == Cover.HEDGE, world.cover == Cover.FOREST
+    h[hedge] = 2.5 + 2.5 * crown[hedge]
+    h[forest] = 10.0 + 10.0 * crown[forest]
+    for b in world.buildings:
+        cv2.fillPoly(h, [np.round(b.corners).astype(np.int32)], float(b.height))
+    return np.where(world.cover == Cover.BUILDING, h, np.where(hedge | forest, h, 0.0))
+
+
 def generate_terrain(spec: TerrainSpec, size_m: float, seed: int) -> Terrain | None:
     """Smooth random hills over the world's extent, or None for flat ground."""
     if spec.relief_m <= 0:
@@ -240,6 +261,16 @@ def apply_changes(world: World, spec: ChangeSpec, seed: int) -> World:
         low = world.soil < np.quantile(world.soil, 0.35)  # hollows hold the water
         wet = fields[world.parcel] & low & np.isin(cover, [Cover.GRASS, Cover.CROP])
         cover[wet] = Cover.WATER
+
+    if spec.tide_m != 0 and (cover == Cover.WATER).any():
+        sea = (cover == Cover.WATER).astype(np.uint8)
+        land = cv2.distanceTransform(1 - sea, cv2.DIST_L2, 5) * world.gsd  # metres to water
+        water = cv2.distanceTransform(sea, cv2.DIST_L2, 5) * world.gsd  # metres to land
+        shore = np.isin(cover, [Cover.SAND, Cover.GRASS, Cover.BOG, Cover.BARE])
+        if spec.tide_m > 0:
+            cover[shore & (land <= spec.tide_m)] = Cover.WATER
+        else:
+            cover[(cover == Cover.WATER) & (water <= -spec.tide_m)] = Cover.SAND
 
     keep = rng.random(len(world.buildings)) >= spec.buildings_removed
     buildings = [b for b, k in zip(world.buildings, keep, strict=True) if k]

@@ -27,14 +27,30 @@ class RunResult:
     track: np.ndarray  # estimated vs true track drawn over the map
 
 
-def localize(geomap: GeoMap, rec: Recording, cfg: LocalizerConfig | None = None) -> list[Estimate]:
+def localize(
+    geomap: GeoMap,
+    rec: Recording,
+    cfg: LocalizerConfig | None = None,
+    start: tuple | None = None,
+) -> list[Estimate]:
+    """Estimates for every frame; ``start`` is a known first position, its sigma and
+    optionally the velocity (east, north) the aircraft had there."""
     loc = Localizer(geomap, rec.camera, cfg, takeoff=rec.takeoff)
+    if start is not None:
+        xy, sigma, *velocity = start
+        loc.start_at(xy, sigma, velocity=velocity[0] if velocity else None)
     return [loc.process(frame) for frame in rec]
 
 
 def run_scenario(sc: Scenario, cfg: LocalizerConfig | None = None) -> RunResult:
     geomap, rec = simulate(sc)
-    estimates = localize(geomap, rec, cfg)
+    start = None
+    if sc.known_start_m is not None and len(rec.truth) > 1:
+        off = np.random.default_rng(sc.seed).normal(0.0, sc.known_start_m, 2)
+        a, b = rec.truth[:2]
+        velocity = ((b.x - a.x) / (b.t - a.t), (b.y - a.y) / (b.t - a.t))
+        start = ((a.x + off[0], a.y + off[1]), sc.known_start_m, velocity)
+    estimates = localize(geomap, rec, cfg, start)
     assert rec.truth is not None
     track = draw_track(geomap, estimates, rec.truth)
     return RunResult(sc.name, evaluate(estimates, rec.truth), track)

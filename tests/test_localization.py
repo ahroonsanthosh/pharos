@@ -263,12 +263,12 @@ def test_coarse_features_are_the_fine_ones_reduced(small_sim):
 
     geomap, rec = small_sim
     m = CorrelationMatcher(geomap, rec.camera)
-    fine, gsd = m._features(0)
-    coarse, coarse_gsd = m._features(1)
+    fine, gsd = m._features(0, False)
+    coarse, coarse_gsd = m._features(1, True)
     assert coarse_gsd == 2 * gsd
     np.testing.assert_array_equal(coarse, _reduce(fine))
     blurred = CorrelationMatcher(geomap, rec.camera, MatcherConfig(fine_features=False))
-    assert not np.allclose(blurred._features(1)[0], coarse)
+    assert not np.allclose(blurred._features(1, True)[0], coarse)
 
 
 def test_heights_compete_by_how_far_they_stand_out():
@@ -311,3 +311,112 @@ def test_candidates_move_by_odometry_at_their_own_height(small_sim):
         loc._predict(h, replace(frame, t=0.5))
         moved.append(float(np.hypot(*(h.xy - before))))
     assert moved == pytest.approx([10.0, 10.0 * 90 / 140], abs=0.1)
+
+
+def test_a_flight_below_its_takeoff_point_is_still_flying(small_sim):
+    """Taken off on high ground, an aircraft reads less than nothing over the valley it is
+    50 m above; until it has left the ground, though, a low reading means on the ground."""
+    from dataclasses import replace
+
+    from pharos.nav.localizer import usable_view
+    from pharos.terrain import Terrain
+    from pharos.types import Telemetry
+
+    geomap, rec = small_sim
+    x0, y0, x1, y1 = geomap.extent
+    ramp = np.array([[0.0, 100.0], [0.0, 100.0]], np.float32)  # rises 0.1 m per m eastwards
+    geomap = replace(geomap, terrain=Terrain(ramp, 1000.0, x0, y1))
+    loc = Localizer(geomap, rec.camera, takeoff=(x1, y0))  # about 70 m up the slope
+
+    def seen(altitude):
+        tel = Telemetry(altitude, 0.0, above_takeoff=True)
+        loc._height = loc._height_field(tel)
+        return loc._above_ground(replace(rec.frames[0], telemetry=tel), None).telemetry
+
+    assert not usable_view(seen(0.5), loc.cfg)  # on the ground
+    assert seen(40.0).altitude == 40.0  # climbed: a usable height above takeoff stays
+    below = seen(-10.0)
+    assert usable_view(below, loc.cfg) and not below.above_takeoff and below.altitude > 15
+
+
+def test_a_known_start_is_tracked_from_the_first_frame(small_sim):
+    """With the last fix before jamming, there is a position from the first frame and it
+    is trusted sooner than from a cold start."""
+    geomap, rec = small_sim
+    g = rec.truth[0]
+    known = localize(geomap, rec, start=((g.x + 8.0, g.y - 6.0), 10.0))
+    cold = localize(geomap, rec)
+
+    def first_trusted(estimates):
+        return next(i for i, e in enumerate(estimates) if e.status is Status.TRACKING)
+
+    assert all(e.status in (Status.TRACKING, Status.COASTING) for e in known)
+    assert first_trusted(known) < first_trusted(cold)
+    m = evaluate(known, rec.truth)
+    assert m["misleading"] == 0 and m["coverage_25m"] > evaluate(cold, rec.truth)["coverage_25m"]
+
+
+def test_a_known_start_survives_frames_without_odometry(small_sim):
+    """Before odometry says how fast it flies, the track is bounded by how fast it can."""
+    from pharos.nav.localizer import LocalizerConfig
+
+    geomap, rec = small_sim
+    g = rec.truth[0]
+    loc = Localizer(geomap, rec.camera, LocalizerConfig(odometry=None))
+    loc.start_at((g.x, g.y), 5.0)
+    first = [loc.process(f) for f in rec.frames[:3]]
+    assert all(e.status in (Status.TRACKING, Status.COASTING) for e in first)
+    assert first[-1].sigma_xy < 50.0
+
+
+def test_low_frames_match_on_a_finer_map_level(small_sim):
+    """A frame from 40 m sees too little ground for a 1 m map; one from 170 m does not."""
+    from pharos.geomap import GeoMap
+    from pharos.vision.matcher import MatcherConfig
+
+    _, rec = small_sim
+    fine_map = GeoMap(np.zeros((400, 400, 3), np.uint8), 0.5)  # levels: 0.5, 1, 2 m
+    m = CorrelationMatcher(fine_map, rec.camera, MatcherConfig(fine_level=1, coarse_level=2))
+    frame = rec.frames[0]
+    assert m._levels(frame, 170.0) == (1, 2)
+    assert m._levels(frame, 40.0) == (0, 1)
+
+
+def test_a_known_start_in_mid_air_learns_its_height_from_its_speed(hills_sim):
+    """Heights read from a takeoff point 60 m below this ground (a video that begins in
+    mid-air): the start's ground speed against odometry's step gives the true height."""
+    from dataclasses import replace
+
+    geomap, rec = hills_sim
+    frames = [
+        replace(f, telemetry=replace(f.telemetry, altitude=f.telemetry.altitude + 60.0))
+        for f in rec.frames
+    ]
+    a, b = rec.truth[:2]
+    velocity = ((b.x - a.x) / (b.t - a.t), (b.y - a.y) / (b.t - a.t))
+    loc = Localizer(geomap, rec.camera)
+    loc.start_at((a.x, a.y), 5.0, velocity=velocity)
+    estimates = [loc.process(f) for f in frames]
+    takeoff = float(geomap.terrain.at(np.array(rec.takeoff)))
+    assert loc.takeoff_elevation == pytest.approx(takeoff - 60.0, abs=6.0)
+    true = np.array([g.altitude for g in rec.truth])
+    used = np.array([e["tel"].altitude for e in loc.log])
+    assert np.median(np.abs(used - true) / true) < 0.05
+    m = evaluate(estimates, rec.truth)
+    assert m["misleading"] == 0 and m["coverage_25m"] > 0.7  # 0 without, 0.87 told the heights
+
+
+def test_a_frozen_video_does_not_hold_the_track_back(small_sim):
+    """A stalled link repeats its last picture for 3 s while the aircraft flies on: the
+    repeats are not matched (they show where it was) and the track dead-reckons."""
+    from dataclasses import replace
+
+    geomap, rec = small_sim
+    frames = list(rec.frames)
+    for i in range(30, 36):
+        frames[i] = replace(frames[i], image=frames[29].image)
+    loc = Localizer(geomap, rec.camera)
+    estimates = [loc.process(f) for f in frames]
+    m = evaluate(estimates, rec.truth)
+    assert m["misleading"] == 0 and m["within_3_sigma"] == 1.0
+    assert all(loc.log[i]["fix"] is None and loc.log[i]["motion"] is None for i in range(30, 36))

@@ -143,3 +143,17 @@ recording format above is only needed for simulated flights.
   over ground with edges (fields, roads, buildings, water) rather than
   continuous forest, and give it a straight stretch of 150 m or more to
   confirm a first position. Below about 80 m, match at `--map-gsd 0.5`.
+  How much height matters, over simulated Irish ground with an 80° lens (a
+  frame 200 m wide at 120 m, 67 m at 40 m), as the share of a two-minute
+  flight located: pasture 90% at 110 m, 68% at 60 m, none at 40 m against a
+  1 m map and 41% against a 0.5 m one; bog and coast 90%, 85% and 47%;
+  uplands with 200 m of relief 77% at 110 m and 44% at 60 m. None trusted
+  a wrong position: lower flights find their first position later or not
+  at all. Against a 0.5 m map, pasture covered 90%, 85% and 50% at 110, 60
+  and 40 m from a cold start, bog and coast 90%, 90% and 62%; the 40 m
+  flights took 45 to 60 s to find their first position. Starting instead
+  from a last GNSS fix known to 10 m (`--known-start`, or **Start from GPS**
+  live), the same flights covered 95 to 96% at every height, again with no
+  wrong position trusted: at 40 m the hard part is the first position, not
+  keeping it. Real ground is likely harder still low down, where hedges and
+  trees a few metres tall look different from the overhead map.
