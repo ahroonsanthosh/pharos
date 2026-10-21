@@ -468,9 +468,15 @@ to about 6 m).
 * **A first position from low down.** At 40 m a cold start takes 45 to 60 s
   in simulation, against none from a known start: wrong candidates fill
   every slot and the true one, which the global search keeps finding again,
-  is dropped. Two options aim at this (`evict_stale`, `refound_distinct`,
-  off by default) and still need whole-flight runs. Odometry also reads
-  about 18% short at 50 m.
+  is dropped. Two options aim at this, both off by default. `evict_stale`
+  (a new candidate replaces one that can no longer confirm) raised bog at
+  40 m from 62% to 82% and pasture at 60 m from 85% to 88% in simulation,
+  with nothing worse, but left pasture at 40 m at 50%; on the real flights
+  it averaged 77% against 81% over four runs of flight 2 (one sample up 12
+  points, the other down 16), was neutral on flight 1 and BAMBI, and still
+  confirmed nothing on BAMBI from a cold start. `refound_distinct: 3`
+  changed no simulated flight at all. Odometry also reads about 18% short
+  at 50 m.
 * **An Irish flight.** The Irish scenarios are simulated. The test that
   counts is a real flight over Irish pasture or bog against a free map of
   it, which in Ireland means surveying the area once yourself (see
