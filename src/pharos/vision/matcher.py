@@ -273,7 +273,8 @@ class CorrelationMatcher:
         open_variance = (cfg.open_ridge_m / gsd) ** 2
         (crr, crc), (_, ccc) = peak_covariance(res.best, r, c, rho, open_variance) * gsd**2
         spread = (float(ccc), float(-crc), float(crr))
-        return Fix(x, y, heading, s1, _distinct(s1, s2), altitude / base, excess, spread)
+        edge = 0 if len(altitudes) == 1 else (-1 if si == 0 else int(si == len(altitudes) - 1))
+        return Fix(x, y, heading, s1, _distinct(s1, s2), altitude / base, excess, spread, edge)
 
     def _height_bins(self, height: HeightField, scale: float, region: SearchRegion, expected):
         """Heights to render the frame for over ``region``, and which one applies where."""
