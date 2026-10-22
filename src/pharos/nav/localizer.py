@@ -141,6 +141,11 @@ class LocalizerConfig:
     min_heading_span_deg: float = 6.0  # at least three fine heading steps
     max_heading_span_deg: float = 30.0
     smoothing: float = 0.2  # EMA weight for altitude-scale and compass-offset estimates
+    # Share of that weight for a match whose scale lies at the edge of the matcher's
+    # altitude hypotheses: only a bound then, and at 50 m, a few metres off, the smallest
+    # footprint fits best whatever the true scale. At full weight the scale ratcheted
+    # down 1.2% a frame, odometry read 18% short and the track drifted 28 m off.
+    scale_edge_weight: float = 0.25
 
 
 def usable_view(tel: Telemetry, cfg: LocalizerConfig) -> bool:
@@ -952,7 +957,8 @@ class Localizer:
     def _learn(self, fix: Fix, frame: Frame) -> None:
         """Slowly track altitude bias and compass offset from confirmed fixes."""
         a = self.cfg.smoothing
-        self.scale += a * (fix.scale - self.scale)
+        w = self.cfg.scale_edge_weight if fix.scale_edge else 1.0
+        self.scale += w * a * (fix.scale - self.scale)
         if frame.telemetry.yaw is not None:
             err = float(wrap_angle(fix.heading - frame.telemetry.yaw - self.compass_offset))
             self.compass_offset = float(wrap_angle(self.compass_offset + a * err))

@@ -1,5 +1,7 @@
 """Matcher and localizer against a small simulated flight."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -420,3 +422,22 @@ def test_a_frozen_video_does_not_hold_the_track_back(small_sim):
     m = evaluate(estimates, rec.truth)
     assert m["misleading"] == 0 and m["within_3_sigma"] == 1.0
     assert all(loc.log[i]["fix"] is None and loc.log[i]["motion"] is None for i in range(30, 36))
+
+
+def test_a_scale_at_the_edge_of_the_search_is_only_a_bound(small_sim):
+    geomap, rec = small_sim
+    matcher = CorrelationMatcher(geomap, rec.camera)
+    frame, g = rec.frames[10], rec.truth[10]
+    prior = SearchRegion((g.x, g.y), 5, g.heading, np.radians(4))
+    true = g.altitude / frame.telemetry.altitude
+    assert matcher.match(frame, prior, true)[0].scale_edge == 0
+    low = matcher.match(frame, prior, 0.9 * true)[0]  # the height lies above every hypothesis
+    assert low.scale_edge == 1 and low.scale == pytest.approx(0.9 * true * 1.06)
+    # Learned from, such a bound moves the altitude scale a quarter as far as a measurement:
+    # at 50 m, a few metres off, the smallest footprint fit best and ratcheted it down.
+    loc = Localizer(geomap, rec.camera)
+    loc._learn(replace(low, scale=0.94, scale_edge=-1), frame)
+    edge = loc.scale
+    loc.scale = 1.0
+    loc._learn(replace(low, scale=0.94, scale_edge=0), frame)
+    assert 1.0 - edge == pytest.approx(0.25 * (1.0 - loc.scale))

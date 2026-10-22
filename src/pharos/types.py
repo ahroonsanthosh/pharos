@@ -73,6 +73,9 @@ class Fix:
     # Position ambiguity of the peak, m^2 (east-east, east-north, north-north): large
     # along a ridge, e.g. when flying along a straight field edge (correlate.peak_covariance)
     spread: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # -1 or 1 when the lowest or highest altitude hypothesis won: ``scale`` is then only
+    # a bound (the best fit may lie further out), not a measurement
+    scale_edge: int = 0
 
 
 class Status(StrEnum):
