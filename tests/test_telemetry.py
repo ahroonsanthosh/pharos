@@ -29,6 +29,13 @@ GPS(7.4412,46.9512,15) ISO:100 Shutter:60 EV:0 Fnum:2.2
 BAROMETER:95.3
 """
 
+PHANTOM_SRT = """1
+00:00:00,000 --> 00:00:01,000
+F/3.5, SS 320, ISO 100, EV -0.7, RTK (126.952051, 37.455979, 28), \
+HOME (126.952025, 37.455954, 35.78m), D 3.60m, H 16.18m, H.S 0.00m/s, V.S 0.00m/s, \
+F.PRY (-3.3°, 1.0°, -165.5°), G.PRY (-44.7°, 0.0°, -164.6°)
+"""
+
 
 def test_modern_dji_srt():
     samples = parse_dji_srt(MODERN_SRT)
@@ -48,6 +55,17 @@ def test_legacy_dji_srt():
     assert sample.telemetry.altitude == 95.3
     assert sample.gnss == (46.9512, 7.4412)
     assert sample.telemetry.yaw is None
+
+
+def test_phantom_4_srt(tmp_path):
+    ((_, sample),) = parse_dji_srt(PHANTOM_SRT)
+    assert sample.telemetry.altitude == 16.18  # H, above home: not D (distance) or RTK altitude
+    assert sample.gnss == (37.455979, 126.952051)
+    assert math.isclose(math.degrees(sample.telemetry.pitch), 45.3)  # gimbal, not airframe
+    assert math.isclose(math.degrees(sample.telemetry.yaw), -164.6)
+    path = tmp_path / "DJI_0001.SRT"
+    path.write_text(PHANTOM_SRT)
+    assert SrtTelemetry(path).takeoff == (37.455954, 126.952025)
 
 
 def test_srt_lookup_by_video_time(tmp_path):

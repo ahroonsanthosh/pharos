@@ -215,3 +215,11 @@ def test_tide_moves_the_shoreline():
     high = apply_changes(w, ChangeSpec(replant=0.0, tide_m=10.0), 1)
     low = apply_changes(w, ChangeSpec(replant=0.0, tide_m=-10.0), 1)
     assert np.mean(low.cover == Cover.WATER) < sea < np.mean(high.cover == Cover.WATER)
+
+
+def test_a_flight_never_trusted_still_gets_a_table_row():
+    from pharos.eval.bench import RunResult, table_row
+
+    metrics = {"availability": 0.0, "coverage_25m": 0.0, "misleading": 0.0}
+    row = table_row(RunResult("lost_all_along", metrics, np.zeros((1, 1, 3), np.uint8)))
+    assert row.startswith("| lost_all_along | 0% |") and "| - |" in row

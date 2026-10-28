@@ -81,6 +81,11 @@ class LocalizerConfig:
     # A candidate the wide search finds again this many more times stands out map-wide
     # even if no single search said so (0: only init_min_distinctiveness counts).
     refound_distinct: int = 0
+    # Each candidate keeps its own altitude scale, from the match that found it and moved
+    # halfway to each of its matches', and searches and moves at it. With one shared scale
+    # a barometer 27% high kept the true candidate's matches at the edge of their heights
+    # for 100 s (the wide search had found it at once).
+    candidate_scales: bool = False
     lost_search_every: int = 2  # frames between global searches while lost
     reacquire_every: int = 6  # frames between global searches while converging
     # A lost track keeps dead reckoning. Acquisition then searches its 3-sigma region, and
@@ -175,6 +180,7 @@ class _Hypothesis:
     untrusted_since: float = 0.0  # time trust was lost
     frames: list[int] = field(default_factory=list)  # log indices since acquisition
     fixes: dict[int, Fix] = field(default_factory=dict)  # its matches, by log index
+    scale: float = 1.0  # its own altitude scale (with candidate_scales)
 
     @property
     def mean_score(self) -> float:
@@ -341,14 +347,20 @@ class Localizer:
         if not tel.above_takeoff or self.takeoff_elevation is not None or tel.altitude <= 0:
             self._start_motion = None
             return
+        # The start's velocity holds only so long, and not through a bank: on a fixed-wing
+        # that started in one, the steps once odometry came back 3 s later said 64% less.
+        late = frame.t - c["t"] > cfg.height_from_speed_s + 1.0
+        if late or tel.tilt > np.radians(cfg.max_match_tilt_deg):
+            self._start_motion = None
+            return
         if m is None or self._last_t is None or last_yaw is None or tel.yaw is None:
-            if c["from"] is not None or frame.t - c["t"] > 1.0:
-                self._start_motion = None  # a gap in the steps, or none to begin with
             return
         if c["from"] is None:
-            c["from"], c["yaw"] = self._last_t, last_yaw
+            c["from"], c["yaw"], c["span"] = self._last_t, last_yaw, 0.0
         c["sum"] += rot2(last_yaw + self.compass_offset) @ m.d_body
-        span = frame.t - c["from"]
+        # A step odometry missed is missing from the time too, rather than ending it.
+        c["span"] += frame.t - self._last_t
+        span = c["span"]
         if span < cfg.height_from_speed_s:
             return
         self._start_motion = None
@@ -482,6 +494,7 @@ class Localizer:
         )
         kf.P[:2, :2] += _spread(f)
         hyp = _Hypothesis(kf, [f.score], t, np.array([f.x, f.y]), 0.0, f.distinctiveness)
+        hyp.scale = f.scale if cfg.candidate_scales else self.scale
         hyp.frames, hyp.fixes = [len(self.log) - 1], {len(self.log) - 1: f}
         hyp.near_track = near_track
         self.hypotheses.append(hyp)
@@ -521,6 +534,8 @@ class Localizer:
             lead = np.mean(best.scores[-k:]) - np.mean(other.scores[-k:])
             if other is not best and lead < cfg.confirm_margin:
                 return
+        if cfg.candidate_scales:
+            self.scale = best.scale
         self._start_window(best)
         if self.takeoff_elevation is None and self.terrain is not None:
             self._learn_takeoff(best)
@@ -555,6 +570,8 @@ class Localizer:
         before = h.xy
         if m is not None:
             k = self._own_scale(h, frame.telemetry)
+            if cfg.candidate_scales:
+                k *= h.scale / self.scale  # odometry ran at the shared scale
             kf.predict_motion(dt, k * m.d_body, m.d_heading, k * m.sigma_m, m.sigma_heading)
         else:
             kf.predict(dt, None if yaw is None or last is None else float(wrap_angle(yaw - last)))
@@ -594,7 +611,7 @@ class Localizer:
                 )
             ),
         )
-        fixes = self._match(frame, region)
+        fixes = self._match(frame, region, h.scale if cfg.candidate_scales else None)
         fix = fixes[0] if fixes else None
         if not self._accepts(fix, h.trusted, 0.0 if h.trusted else cfg.untrusted_extra_excess):
             fix = None
@@ -611,6 +628,8 @@ class Localizer:
             h.streak = 0
             return None
         h.fixes[len(self.log) - 1] = fix
+        if cfg.candidate_scales:
+            h.scale += 0.5 * (fix.scale - h.scale)
         if h.streak == 0:
             h.streak_from = h.flown
         h.streak += 1
@@ -948,9 +967,10 @@ class Localizer:
         dt = t - self._last_t
         return m if np.hypot(*m.d_body) <= self.cfg.max_speed * dt else None
 
-    def _match(self, frame: Frame, region: SearchRegion) -> list[Fix]:
+    def _match(self, frame: Frame, region: SearchRegion, scale: float | None = None) -> list[Fix]:
         try:
-            return self.matcher.match(frame, region, self.scale, self._height)
+            scale = self.scale if scale is None else scale
+            return self.matcher.match(frame, region, scale, self._height)
         except ValueError:  # e.g. camera tilted above the horizon
             return []
 

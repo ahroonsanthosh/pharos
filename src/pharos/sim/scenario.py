@@ -70,6 +70,9 @@ class Scenario:
     # GNSS lost at the start, its last fix known to within this many metres (None: a cold
     # start, nothing known). The fix given is the truth off by that much, at random.
     known_start_m: float | None = None
+    # ...unless the fix was already spoofed: then it is this far (east, north) off, though
+    # still claimed good to known_start_m.
+    known_start_error_m: tuple[float, float] | None = None
     map_shift_m: tuple[float, float] = (0.0, 0.0)  # the map's georeference is this far off
     # The map stops short of the flight: metres cut off its (west, south, east, north) sides
     # after the flight is planned over the whole world.

@@ -18,6 +18,7 @@ from pharos.vision.correlate import (
     parabola_offset,
     peak_covariance,
     peak_excess,
+    ridge_excess,
     subpixel,
 )
 from pharos.vision.features import FeatureConfig, orientation_field
@@ -91,6 +92,9 @@ class MatcherConfig:
     sidelobe_m: float = 8.0  # tracking: rival peaks must be at least this far from the best
     min_overlap: float = 0.75
     open_ridge_m: float = 150.0  # along-ridge uncertainty of a ridge leaving the search window
+    ridge_excess: bool = False  # a ridge's peak may stand out across it (correlate.ridge_excess)
+    ridge_excess_penalty: float = 0.0  # ...by this much more than a peak must
+    ridge_max_height_m: float = float("inf")  # ...in frames up to this high
     # "frame": all the ground the image covers; "disk": the largest disk inside it, the same
     # for every heading. On real 16:9 video at 80 m the frame covers 2.3 times the ground,
     # and the true location stood out in 62% of frames instead of 40%.
@@ -269,6 +273,8 @@ class CorrelationMatcher:
         s2 = peaks[1][2] if len(peaks) > 1 else 0.0
         rho = 2 * cfg.features.smooth
         excess = peak_excess(res.best, r, c, rho)
+        if cfg.ridge_excess and base * scale <= cfg.ridge_max_height_m:
+            excess = max(excess, ridge_excess(res.best, r, c, rho) - cfg.ridge_excess_penalty)
         # rows run south: (row, col) pixels to (east, north) metres
         open_variance = (cfg.open_ridge_m / gsd) ** 2
         (crr, crc), (_, ccc) = peak_covariance(res.best, r, c, rho, open_variance) * gsd**2
