@@ -628,8 +628,9 @@ class Localizer:
             h.streak = 0
             return None
         h.fixes[len(self.log) - 1] = fix
-        if cfg.candidate_scales:
-            h.scale += 0.5 * (fix.scale - h.scale)
+        if cfg.candidate_scales:  # a scale at the edge of its search is a bound, as in _learn
+            w = cfg.scale_edge_weight if fix.scale_edge else 1.0
+            h.scale += 0.5 * w * (fix.scale - h.scale)
         if h.streak == 0:
             h.streak_from = h.flown
         h.streak += 1
