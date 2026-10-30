@@ -2,605 +2,114 @@
 
 [![ci](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg)](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml)
 
-**Drone navigation without GPS.** Pharos finds a drone's position and heading
-by matching its downward camera against free satellite or aerial imagery, so
-it keeps working when GNSS is jammed, spoofed or simply not there. It runs on
-a laptop CPU with no learned weights and no paid maps, and takes any video
-feed with MAVLink (ArduPilot, PX4) or DJI telemetry, live or recorded.
+**GPS-free navigation for drones.** Pharos works out where a drone is by
+matching its downward camera against free satellite and aerial maps. When
+GPS is jammed, spoofed or just missing, it keeps going.
 
-It is built to fail safe: every position carries an honest uncertainty, and a
-position is reported as trusted only when independent evidence supports it.
+It runs on a laptop CPU. No trained models, no paid maps, no special
+hardware. Plug in any video feed with MAVLink (ArduPilot, PX4) or DJI
+telemetry, live or recorded.
 
-| Real flight (public data; GPS only to score) | Analysed after the flight | Live, in flight | Trusted but wrong |
-|---|---:|---:|---:|
-| Farmland survey, fixed-wing, 13 min | 92% | 63% | none |
-| River valley survey, fixed-wing, 15 min | 91% | 52% | none (1 frame in another run) |
+![Pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
 
-*Share of the flight with a trusted position within 25 m of GPS, from the
-video alone.* In simulation, none of 31 scenarios (from snow, dusk haze and
-spring clouds to Irish bog, 200 m uplands, a frozen video link, GNSS
-jammed at 50 m and a last fix already spoofed) trusts a wrong position.
+<sub>A real flight: Pharos's estimate from the video alone (blue trusted,
+orange coasting with its uncertainty) over the GPS track (green).
+Orthophoto: PNOA © Instituto Geográfico Nacional, CC BY 4.0.</sub>
 
-![Flight 1: pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
+## Why it matters
 
-*Flight 1 analysed after the flight: pharos's estimate from the video alone
-(blue trusted, orange coasting with its uncertainty) over the GPS track
-(green). Orthophoto: PNOA © Instituto Geográfico Nacional, CC BY 4.0.*
+GPS jamming and spoofing are now routine, and most drones are lost without
+it. Visual navigation exists, but it usually needs expensive maps, a GPU or
+a model trained on the area. Pharos needs none of those.
 
-Pharos is built to survive what changes between when the map was captured
-and when the drone flies over: arbitrary heading, season, sun angle and
-shadows, haze, altitude error, camera tilt, terrain, and land changes such as
-crop rotation, construction and felling. A simulator generates realistic test
-flights so every change is benchmarked before it meets hardware.
+Just as important, it knows when it doesn't know. Every position comes with
+an honest uncertainty, and Pharos only calls a position "trusted" when
+independent evidence backs it up. A navigation system that is confidently
+wrong is worse than none.
 
-## Run it on a laptop
+## Results
+
+On public real-world flights, with GPS used only to score the result:
+
+| Flight                                  | Trusted within 25 m (after flight) | Live, in flight | Trusted but wrong |
+| --------------------------------------- | ---------------------------------: | --------------: | ----------------: |
+| Farmland survey, fixed-wing, 13 min     |                                92% |             63% |              none |
+| River valley survey, fixed-wing, 15 min |                                91% |             52% |              none |
+
+In simulation, across 31 scenarios (snow, haze, low sun, clouds on the map,
+Irish bog and uplands, a frozen video link, GPS jammed at 50 m, a last GPS
+fix that was already spoofed and more), Pharos never trusts a wrong
+position. Reproduce it with `pharos bench`. The full benchmark table, every
+real flight (including DJI footage from 16 to 92 m) and what was tried and
+dropped are in [docs/results.md](docs/results.md).
+
+## Try it
 
 ```bash
 git clone https://github.com/ahroonsanthosh/pharos.git && cd pharos
 docker compose up            # then open http://localhost:8000
 ```
 
-The dashboard takes feeds from anywhere: a DJI controller or OBS pushing
-RTMP/SRT, RTSP/HLS/UDP stream URLs, an HDMI capture card or webcam, recorded
-videos with DJI `.SRT` telemetry, or a built-in demo flight. Telemetry
-comes from MAVLink (ArduPilot/PX4), DJI subtitle files or manual entry;
-recorded footage can also pair with an ArduPilot log. When
-the aircraft reports GPS, it is drawn next to the visual estimate, so every
-real flight measures accuracy. With **Start from GPS**, a feed begins from
-the aircraft's GPS position and velocity at takeoff and never uses GPS
-again, so later jamming or spoofing cannot pull it away; the **GNSS check**
-then flags a receiver that keeps a confident fix while drifting further from
-pharos's trusted position than both uncertainties allow, as a spoofed one
-does. Setup for each source is in
-[docs/laptop.md](docs/laptop.md).
+The dashboard takes almost any feed: a DJI controller or OBS over RTMP/SRT,
+RTSP/HLS/UDP streams, a capture card or webcam, recorded video with DJI
+`.SRT` files, or a built-in demo flight. If the drone reports GPS, it is
+drawn beside Pharos's estimate so you can see the accuracy for yourself.
 
-## Analyze recorded footage
+**Start from GPS** takes one fix at takeoff and never uses GPS again, so
+later jamming can't pull it off course. The **GNSS check** then flags a
+receiver that looks confident but is drifting away, which is what a spoofed
+one does. Setup for each source: [docs/laptop.md](docs/laptop.md).
 
-The same engine works on archives, not just live feeds: patrol logs, survey
-photo sets, old flight videos. Footage is processed as fast as the CPU allows.
+## Analyse recorded footage
 
 ```bash
-pharos analyze DJI_0042.MP4 --map area.tif --hfov 70        # .SRT next to the video is used
-pharos analyze photos/ --map area.tif                       # EXIF GPS/time, DJI or senseFly XMP
+pharos analyze DJI_0042.MP4 --map area.tif --hfov 70     # uses the .SRT beside the video
+pharos analyze photos/ --map area.tif                    # photo sets with EXIF/XMP
 pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry at all
-pharos analyze cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5   # ArduPilot
 ```
 
-Barometric heights (DJI subtitles, MAVLink, an ArduPilot log's height above
-home) are measured from the takeoff point, not the ground below. Pharos
-downloads the free Copernicus 30 m terrain model for the map's area (once,
-then cached) and turns them into heights above the ground. It finds the
-takeoff point in telemetry that starts on the ground; otherwise give it with
-`--takeoff LAT LON`, or pharos learns it from its first confirmed position.
-`--dem` uses another elevation model and `--no-terrain` none.
+Outputs a track as GeoJSON, KML (opens in Google Earth) and CSV, plus a
+summary. If the footage has its own GPS, the summary scores Pharos against
+it. Run `pharos --help` for syncing a separate camera to an autopilot log,
+calibrating a camera, and starting from a known position.
 
-When GNSS was good at the start of the footage and lost later (jammed, or
-cut off on purpose), `--known-start SIGMA_M` begins from the first fixes, as
-from the last ones before jamming: the position, known to within `SIGMA_M`
-metres, and the velocity. GNSS is never used after that, only to score.
-Footage that starts in mid-air reads its heights from a takeoff point it
-never saw (a long DJI video split into parts does this); from a known start,
-pharos then learns the true height from the first 3 s, by comparing the
-ground odometry crosses with the distance the GNSS speed says it flew.
+## How it works
 
-```bash
-pharos analyze DJI_0043.MP4 --map area.tif --hfov 70 --known-start 5
-```
+1. **Rectify.** Project each camera frame onto the ground, using height and
+   tilt, through a terrain model on uneven ground.
+2. **Describe.** Turn frame and map into edge maps (roads, field
+   boundaries, buildings, shorelines) that ignore colour, season and
+   shadows.
+3. **Match.** Score every position on the map at once with FFT
+   cross-correlation, across headings and scales.
+4. **Track.** Follow several candidates until one clearly wins, then fuse
+   map matches with visual odometry, gyro and compass. When matches stop,
+   dead-reckon with a growing uncertainty.
 
-A separate camera and an autopilot log share no clock; `pharos sync` finds
-the offset from the footage alone. On a flight with GNSS, `pharos probe`
-measures per-frame match quality and calibrates the camera once (mount
-misalignment and effective field of view):
-
-```bash
-pharos sync cam.mkv --log flight.bin --log-sync 1 --hfov 77 --start 300
-pharos probe cam.mkv --map area.tif --hfov 77 --log flight.bin --log-sync 1.5
-```
-
-Recorded footage is solved as a whole flight, so a turn or a gap is bridged
-from both sides; `--causal` reports only what a live run would have. Give
-`--map-accuracy` when the reference map itself may be metres off (e.g. 6 for
-NAIP), so reported uncertainties include it.
-
-It writes `track.geojson`, `track.kml` (opens in Google Earth), `track.csv`,
-an overview image, and `summary.json`. When the footage carries its own GPS,
-the summary scores Pharos against it. The dashboard offers the same exports
-for every feed, live or recorded, and accepts photo sets as well as videos.
+Any north-up orthophoto works as a map: USGS NAIP, national programmes like
+IGN, swisstopo and PDOK, OpenAerialMap or Sentinel-2. More in
+[docs/architecture.md](docs/architecture.md).
 
 ## Develop
 
 ```bash
 pip install -e ".[dev,server,geo]"
-pytest -q                                  # unit + end-to-end tests
-pharos bench -j 4 -o runs/bench            # all built-in scenarios
-pharos simulate autumn_low_sun -o runs/autumn      # a flight in the recording format
-pharos localize --map runs/autumn/map.json --recording runs/autumn/recording -o runs/autumn/out
-pharos serve --open                        # dashboard without Docker
+pytest -q                          # tests
+pharos bench -j 4 -o runs/bench    # run every simulated scenario
+pharos serve --open                # dashboard without Docker
 ```
 
-## How it works
+## What's next
 
-1. **Rectify.** Each frame is warped onto the ground at map resolution
-   using its height above the ground and camera tilt. Over uneven ground the
-   frame is projected through a terrain model, so a valley side rising
-   towards the camera is not mistaken for larger ground.
-2. **Describe.** Frame and map become dense orientation fields that keep
-   edges (roads, field boundaries, buildings, shorelines) and discard
-   intensity, contrast polarity, canopy texture and sun-driven shading.
-3. **Correlate.** FFT cross-correlation scores every position at once, over a
-   set of heading and altitude-scale hypotheses.
-4. **Localize.** When lost, a global search proposes candidates. Several are
-   followed in parallel until one clearly wins over 120 m of flight. A
-   confirmed track is the last 40 s of frames solved jointly from visual
-   odometry, gyro, compass and map matches, so a look-alike match is
-   outvoted; it learns the odometry scale and compass bias as it flies. When
-   matches stop, it dead-reckons with an uncertainty that grows honestly and
-   looks for the track again only where that leaves the aircraft. Recorded
-   footage is solved as a whole flight, bridging gaps from both sides.
-
-Each estimate carries a status: `tracking` (trusted), `coasting` (a
-position with an honest uncertainty, not trusted), `converging` (a candidate,
-not yet a position) or `lost`. Details and design rationale are in
-[docs/architecture.md](docs/architecture.md).
-
-## Maps
-
-Any north-up orthophoto works. Free sources include USGS NAIP, national
-programmes such as IGN, swisstopo and PDOK, OpenAerialMap and Sentinel-2.
-See [docs/data.md](docs/data.md) for sources, licences and the recording
-format.
-
-## Benchmark
-
-Thirty-one scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
-at 180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s
-at 110 m with a 16:9 camera, and the fourteen `stress_` ones as their files say)
-over a 1.6 km × 1.6 km world, localized at 2 Hz against a summer
-reference map, from a cold start (no initial position) except where a stress
-scenario starts from a last GNSS fix:
-
-<!-- bench:start -->
-| scenario | avail | fix s | err50 m | err95 m | hdg deg | cover | mislead | gap s | in 3 sd | ms/frame |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| altitude_bias | 84% | 9.5 | 1.4 | 3.2 | 0.2 | 84% | 0.0% | 10 | 100% | 316 |
-| autumn_low_sun | 85% | 9.0 | 1.7 | 3.9 | 0.2 | 85% | 0.0% | 9 | 100% | 359 |
-| dusk_haze | 69% | 8.5 | 1.6 | 5.4 | 0.5 | 69% | 0.0% | 10 | 100% | 372 |
-| grid_farmland | 84% | 9.5 | 1.6 | 3.5 | 0.2 | 84% | 0.0% | 10 | 100% | 354 |
-| hills | 84% | 9.5 | 1.1 | 2.0 | 0.2 | 84% | 0.0% | 10 | 100% | 250 |
-| ireland_bog_coast | 90% | 11.5 | 1.2 | 2.5 | 0.2 | 90% | 0.0% | 12 | 100% | 312 |
-| ireland_pasture | 90% | 11.5 | 1.1 | 2.5 | 0.2 | 90% | 0.0% | 12 | 100% | 261 |
-| ireland_uplands | 75% | 29.5 | 1.0 | 1.9 | 0.1 | 75% | 0.0% | 30 | 100% | 237 |
-| kitchen_sink | 48% | 31.5 | 1.9 | 3.7 | 0.1 | 48% | 0.0% | 32 | 100% | 321 |
-| land_change | 84% | 9.5 | 2.3 | 4.0 | 0.1 | 84% | 0.0% | 10 | 100% | 251 |
-| no_compass_spinning | 84% | 9.5 | 2.0 | 3.9 | 0.0 | 84% | 0.0% | 10 | 100% | 284 |
-| nominal | 85% | 9.0 | 1.4 | 2.5 | 0.1 | 85% | 0.0% | 9 | 100% | 245 |
-| sensor_errors | 84% | 9.5 | 7.2 | 9.4 | 0.4 | 84% | 0.0% | 10 | 100% | 267 |
-| spring_clouds_on_map | 56% | 9.5 | 2.6 | 6.5 | 0.3 | 56% | 0.0% | 17 | 100% | 258 |
-| stress_descent | 90% | 11.5 | 1.2 | 2.8 | 0.4 | 90% | 0.0% | 12 | 100% | 165 |
-| stress_gnss_lost_low | 96% | 5.0 | 1.1 | 3.1 | 0.5 | 96% | 0.0% | 5 | 100% | 126 |
-| stress_hover | 90% | 11.5 | 1.3 | 3.3 | 0.2 | 90% | 0.0% | 12 | 100% | 253 |
-| stress_low_sun_low | 0% | - | - | - | - | 0% | 0.0% | 120 | - | 183 |
-| stress_map_offset | 90% | 11.5 | 9.5 | 10.7 | 0.2 | 90% | 0.0% | 12 | 100% | 248 |
-| stress_midflight | 85% | 9.0 | 1.0 | 1.7 | 0.2 | 85% | 0.0% | 9 | 100% | 194 |
-| stress_off_map | 50% | 11.5 | 1.0 | 2.6 | 0.1 | 50% | 0.0% | 50 | 100% | 248 |
-| stress_rain | 90% | 11.5 | 1.1 | 2.5 | 0.1 | 90% | 0.0% | 12 | 100% | 205 |
-| stress_spoofed_start | 87% | 16.0 | 1.1 | 2.4 | 0.2 | 87% | 0.0% | 16 | 100% | 224 |
-| stress_spoofed_start_far | 59% | 49.5 | 1.0 | 2.7 | 0.1 | 59% | 0.0% | 50 | 100% | 221 |
-| stress_takeoff_hill | 10% | 107.5 | 2.9 | 7.1 | 0.5 | 10% | 0.0% | 108 | 100% | 523 |
-| stress_telemetry | 55% | 11.5 | 1.3 | 6.3 | 0.2 | 55% | 0.0% | 44 | 100% | 248 |
-| stress_tide | 90% | 11.5 | 1.2 | 2.5 | 0.2 | 90% | 0.0% | 12 | 100% | 281 |
-| stress_video | 87% | 11.5 | 1.1 | 2.6 | 0.2 | 87% | 0.0% | 12 | 100% | 223 |
-| tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 307 |
-| valley | 83% | 10.0 | 1.0 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 251 |
-| winter_snow | 86% | 8.5 | 1.5 | 3.5 | 0.1 | 86% | 0.0% | 8 | 100% | 268 |
-<!-- bench:end -->
-
-Columns: share of frames trusted (`tracking`), time to first confirmed
-fix, median and 95th-percentile error of trusted positions, median heading
-error, accurate coverage (trusted and within 25 m) and the misleading rate
-(trusted and further off), both over all frames, the longest stretch without
-a trusted position, the share of trusted positions within three reported
-sigmas, and median processing time per frame on a 4-core CPU running three
-scenarios at once.
-
-Reported uncertainties hold: no frame in the whole benchmark is trusted and
-wrong, and every trusted position is within three sigmas. In `dusk_haze`
-low sun shifts shadow edges into runs of strong matches 20 m off, which the
-track now coasts through rather than following (95th percentile error 5 m).
-Coverage tops out near 85% because a candidate must cover 120 m of new
-ground (about 10 s) before it is trusted. Lower rows report the missing
-frames as coasting, not wrong: in `spring_clouds_on_map`, `kitchen_sink` and
-`dusk_haze`, clouds on the map, haze and forest leave stretches where too
-little matches for a 10 m uncertainty, and `kitchen_sink` takes 30 s to find
-a distinctive start (the frame-sized template, a clear win on real 16:9
-video, is mixed on this 4:3 camera: `winter_snow` now starts in 9 s instead
-of 19 s); `sensor_errors` shows that a 2° camera mount misalignment becomes a
-~6 m bias that no single frame can reveal.
-
-`hills` is a DJI-style terrain-following survey over 150 m of relief whose
-barometer reads up to 54% high, and `valley` flies a camera tilted 20° over
-valleys 200 m deep; frames over both are ray-traced onto the terrain.
-Projecting frames and odometry through the terrain instead of a plane halves
-their errors (median 2.1 to 1.1 m and 2.5 to 1.0 m, 95th percentile 4.1 to
-2.1 m and 4.7 to 2.0 m) and removes a 3.4° heading bias on `hills`, where
-odometry read slopes across the track as turns. With a match in every frame
-the scale the localizer learns keeps up with the barometer even without
-terrain (84% either way); terrain heights pay where matches stop. Started
-mid-flight, with 40 s of no matches, three flights over hills (two following
-the terrain, one at a constant altitude) covered 58%, 57% and 37% of frames
-with terrain heights against 42%, 45% and 37% without, none misleading, and
-dead reckoning came out of the gap 1 to 7 m off instead of 24 to 69 m.
-
-**Ireland.** Three scenarios model Irish ground and weather against a bright
-summer map, each flown at 110 m with a DJI-style 16:9 camera:
-`ireland_pasture` (small fields, nearly all grass and nearly all hedged, on a
-grey winter day, a quarter of them flooded and half grazed or cut
-differently since the map), `ireland_bog_coast` (blanket bog cut by drains,
-rough grazing and stone-walled fields behind a ragged shoreline, in autumn
-drizzle) and `ireland_uplands` (moor, bog and conifer plantation, a third
-felled since the map, 200 m of relief under a terrain-following flight, low
-cloud). Overcast light casts no shadows, so the hedges, walls, drains and
-shorelines carry the match. Flown over several generated worlds each, none
-of 14 flights trusted a wrong position and every reported uncertainty held:
-pasture covered 90% in all four worlds, bog and coast 67 to 90% (mean 84%;
-the 67% world coasted for a stretch), uplands 77 to 90% (mean 86%). The
-uplands are the hard case for the search without a position, over relief:
-there the previous search covered 60 to 90% (mean 82%), and its two
-hardest worlds rose from 60 and 72% to 77 and 80%.
-
-**When things go wrong.** Fourteen `stress_` scenarios, mostly over Irish
-pasture, put a flight through what goes wrong in practice. A rain-spotted
-lens (`stress_rain`), a coast at another tide than the map (`stress_tide`,
-the shoreline 15 m inland), hovers of 20 and 10 s (`stress_hover`) and a descent
-from 110 to 45 m after the first fix (`stress_descent`) each still cover
-90%. A map georeferenced 10 m off (`stress_map_offset`) shifts every match
-alike, which no matching can reveal: the error is the offset, and the 10 m
-sigma still covers it. A telemetry dropout plus a compass pulled 45° off by
-power lines for 15 s (`stress_telemetry`) cost 44 s of trust but nothing
-wrong, and a flight that leaves a map cut too small for 42 s
-(`stress_off_map`) coasts off it and re-locks about 8 s after it returns.
-Two start from a last GNSS fix known to 10 m: GNSS jammed at 50 m
-(`stress_gnss_lost_low`), and a flight joined in mid-air 80 m over hills
-with heights read from a takeoff point 40 m off that ground
-(`stress_midflight`), where the height learned from the speed gives 85%.
-Two of them caught real faults. A frozen video link (`stress_video`)
-repeats its last picture while the aircraft flies on; matched, that picture
-held the trusted track 35 m behind with a 6 m sigma (7.4% of frames
-misleading), so exact repeats are now neither matched nor used for odometry
-(87% covered, none misleading). In `stress_gnss_lost_low` a trusted track
-drifted 20 to 28 m off while it rejected true matches 1 to 3 m from the
-truth as too far from it (2.5% misleading). A trusted track that keeps
-turning down matches agreeing on one place now reports itself as coasting,
-which made that run honest (none misleading, 75% covered); on six
-real-flight runs it changed the status of 3 live frames out of about 9,000.
-The drift itself came from odometry reading 18% short, and that from the
-altitude scale learned from matches (see "A scale at the edge is a bound"
-below); with that fixed the run covers 96%.
-
-Four more test the start and the light. A last GNSS fix that a spoofer had
-already pulled 60 or 120 m off, while it still claimed 10 m
-(`stress_spoofed_start`, `stress_spoofed_start_far`), is never followed into
-a wrong trusted position: the track coasts with its sigma until matches
-place it, trusted after 16 and 50 s. Heights read 30 m high, from a takeoff
-on a hill pharos was not told about, over flat ground with no terrain to
-correct them (`stress_takeoff_hill`), leave the flight 10% covered: the wide
-search finds the place at once, but each candidate's later matches search
-only 6% either side of one shared altitude scale, and it takes 107 s to
-confirm. A winter sun 6° up at 50 m (`stress_low_sun_low`) casts hedge
-shadows the summer map lacks, and nothing is confirmed in two minutes. Both
-are honest failures: nothing wrong is trusted, and they are left in the
-table as limits.
-
-The simulator is still kinder than reality: the map and the drone view share
-exact geometry, and the localizer knows the very terrain the frames were
-rendered over, not a coarser model of it. Expect real cross-season match
-scores to be lower and treat these numbers as an upper bound until validated
-on flights.
-
-## Real flights
-
-Three public datasets, all free, each localized from a cold start with no
-initial position; GNSS is used only to calibrate a camera once and to score.
-Heights are barometric, corrected with the free Copernicus terrain model at
-pharos's own position, so they need no GNSS either.
-Every frame of a flight counts. A frame is **covered** when its position is
-trusted and within 25 m of GNSS, and **misleading** when it is trusted and
-further off. A trusted position has an uncertainty of at most 10 m and two
-independent supporting matches; otherwise the position is still reported, as
-coasting, with its honest uncertainty, so the table also scores every
-position against its own sigma.
-
-| flight | | covered | misleading | trusted within 3σ | any position within 25 m | any position within 3σ |
-|---|---|---:|---:|---:|---:|---:|
-| PinPoint 1: farmland, ~105 m, 13 min | live | 63% | 0.0% | 100% | 89% | 99% |
-| | whole flight | 92% | 0.0% | 100% | 98% | 100% |
-| PinPoint 2: river valley, ~80 m, 15 min | live | 52% | 0.0% | 99% | 89% | 99% |
-| | whole flight | 91% | 0.0% | 100% | 97% | 100% |
-| Aukerman: 77 photos, ~100 m | live | 22% | 0.0% | 100% | 39% | 100% |
-| | whole flight | 43% | 0.0% | 100% | 77% | 100% |
-
-*Live* is what the aircraft would have been told in flight; *whole flight*
-is `pharos analyze` on the recording, solved at once. Flight 2 was localized
-with the camera calibration from flight 1, out of sample.
-
-Reported uncertainties hold: 99% or more of positions, trusted or coasting,
-are within three sigmas of GNSS. No frame in these runs is trusted and wrong;
-a second sample of flight 2 (started a quarter second later) had one, live
-(0.06%, past 25 m within three sigmas), and earlier versions had a few such
-borderline frames on flight 2 (0.1 to 0.3%, 25 to 30 m off). The PinPoint
-maps were fetched again from the PNOA service for these runs, so they are
-not byte for byte the ones behind earlier numbers.
-
-Flight 2 now covers 91% after the flight because of a fix found low over
-simulated pasture (see "A scale at the edge is a bound" below): over four
-runs of flight 2 (two start times, each from a cold start and from a known
-one) coverage rose from a mean of 81% to 92% after the flight and from 47%
-to 52% live, and live misleading frames fell from 0.28% to 0.06% on the
-sample that had them; flight 1 did not change.
-
-Three changes got here. Making the uncertainty honest (dead reckoning,
-overlapping matches counted as one, the estimator fixes below) removed the
-earlier misleading frames (3.4% of flight 2's) but cost trusted coverage,
-since positions trusted on optimistic sigmas then coasted. Matching the whole
-frame instead of the disk inside it won that coverage back and more (flight 2
-whole flight from 31% to 73%). The terrain then helped flight 2: in four
-runs with it (heights, and later projection through it), flight 2 covered 78
-to 90% of the whole flight and 44 to 47% live, against 73 to 77% and 37 to
-40% in two runs with the autopilot's terrain database; flight 1 did not
-change. Flight 2's results vary by about ten points between runs that differ
-only in floating-point detail, because one acquisition more or less shifts a
-whole stretch, so single runs say little. One such shift exposed a real
-fragility: a run covered only 31% of flight 2 (16% live) because a wrong
-leading candidate over higher ground set the height odometry used for every
-candidate; with each candidate at its own height the flight covers 87% (47%
-live). Projecting matches and odometry
-through the terrain, not a plane, changed no coverage beyond that on these
-flights, whose ground is mostly gentle (the median frame of flight 2 sees a
-3% change of scale across it, the steepest tenth 17%), but it made odometry
-steps in banks honest: flight 2's read 2.5% long and now 0.8%, flight 1's
-4.0% and now 1.4%.
-
-**A DJI video.** The *BAMBI* wildlife dataset (Zenodo, CC BY 4.0) publishes
-raw DJI recordings with their `.SRT` files. One 6-minute DJI Mavic 3T segment
-(4K, gimbal straight down, Styria) was run against Austria's free basemap.at
-orthophoto. The survey flew 55 m above the ground (each frame sees about
-70 × 40 m), mostly over continuous autumn forest and harvested fields
-against a summer map, and the true location stood out in only 12% of
-frames. From a cold start pharos never confirmed a position on it, nor
-reported a wrong one, even given Airdata's heights. It also showed that DJI's `rel_alt` is height above
-takeoff even on terrain-following missions: it read 46 to 112 m, a median
-42 m too high, while the drone held 50 to 63 m above the ground. With the
-Copernicus terrain model pharos brings that to within 3.5 m (median) of
-Airdata's height above ground, most of the rest being forest canopy, which
-the camera sees too.
-
-The segment starts in mid-air, so it is also the case `--known-start` is
-for: GNSS good at the start and lost after. From the first fixes (5 m), with
-the raw `rel_alt` and the height learned from the speed, pharos covered 75%
-of the 6 minutes after the flight and 70% live, median error 1.7 m (live
-1.9 m, 95th percentile 2.9 m and 8.3 m), with no trusted position wrong and
-every position, trusted or coasting, within three sigmas; it had a position
-within 25 m in 93% of frames. Started half a second later, it covered 67%
-and 63%, again with nothing wrong and everything within three sigmas. See
-[docs/data.md](docs/data.md#from-real-hardware) for how to fly and record
-for pharos.
-
-**More DJI footage.** Three more clips, each against a free map with its
-GNSS used only to score:
-
-* *Meadows near Klagenfurt at 30 m* (BAMBI flight 271, Mavic 3T, June 2023,
-  basemap.at at 0.3 m, takeoff from the Airdata log's first row). From a
-  known start pharos had a position within 25 m of GNSS in 99.9% of frames
-  after the flight and 97.8% live, median error 1.7 m, trusted 32% of the
-  time (16% live), nothing wrong and every position within three sigmas.
-  From a cold start nothing was confirmed: the flight stays in a 200 × 130 m
-  patch, short of the 120 m a candidate must fly to be confirmed.
-* *Forest west of Vienna, 38 m above the ground* (BAMBI flight 2, July
-  2023). From a known start, trusted only 5% of the time and within 25 m
-  in 39% of frames, but nothing wrong and every position within three
-  sigmas. Odometry here is measured at the wrong height: the Copernicus
-  model, at 30 m, puts the forest canopy only 3 m above the ground Airdata
-  reports, while the frames show crowns perhaps 20 m below the camera, so
-  every step reads 1.5 to 2 times too long. A check of the first 3 s of
-  odometry against the start's GNSS speed fixed this flight (86% within
-  25 m), but the same check fired wrongly on PinPoint 1, whose speed fell
-  15% in those 3 s, so it was not kept (see Next steps for a canopy model).
-* *A Phantom 4 RTK at 16 m with the camera 45° from straight down* (a
-  public calibration clip from Seoul, Zenodo, CC BY 4.0, with RTK truth and
-  a 3 cm basemap). Matching was allowed up to 50° of tilt (the default is
-  30°). Nothing was trusted in four minutes over a small lawn, but every
-  position stayed within 4.9 m of RTK (median 2.9 m) against a reported
-  sigma of about 6 m. Pharos now reads the Phantom 4's subtitle format.
-
-### Data and workflow
-
-*PinPoint* (Zenodo, CC BY 4.0) is two flights of an ArduPlane VTOL with a
-consumer camera (Sony IMX477, 1280×720 at 60 fps) on a pitch/yaw servo mount,
-each with its ArduPilot `.bin` log; the camera and autopilot share no clock.
-The map is Spain's PNOA orthophoto (IGN, CC BY 4.0, July 2024) over its free
-WMS. *Aukerman* (OpenDroneMap, CC0) is a senseFly eBee survey, photos 4 to
-22 s apart, matched against USGS NAIP 2015 (`--map-accuracy 6`: NAIP is good
-to about 6 m).
-
-1. `pharos sync` placed flight 1's video 1.54 s after the first GNSS fix
-   (published by eye: 1.2 s; odometry steps disagree by 8.2 m at 1.2 s and
-   by 1.8 m at 1.54 s). On flight 2 it agreed with the published value.
-2. `pharos probe` on flight 1 measured an effective field of view of 76.7°
-   (published 72.3°) and a mount offset of 4.4° back, 3.0° right.
-3. `pharos analyze` over the cruise part of each flight at 2 frames/s.
-
-### What real footage taught
-
-* **Use the whole frame.** Matching took the largest disk inside the frame, so
-  a 16:9 camera used only its short side. At flight 2's 80 m that was 72 m
-  of ground out of 127 × 71 m; matching all of it, the true location stood
-  out from noise in 62% of frames instead of 40%, and at a stricter
-  threshold chance peaks passed less often than before. This one change took
-  flight 2 from 32% to 73% covered.
-* **Overlapping frames are one observation.** Consecutive frames see the same
-  ground, so a look-alike fools a run of them alike. Counted as independent,
-  sixteen such matches in a test outvoted odometry and the solve claimed 3 to
-  5 m while 50 m off. Matches less than 40 m apart now share one vote; on flight 1
-  this alone cut the whole-flight misleading rate from 1.9% to 0.5%.
-* **Lost is not unknown.** A lost track keeps dead reckoning, reported with
-  a growing sigma, and the search for a new track is confined to where that
-  leaves the aircraft (every third search still covers the whole map, in
-  case the lost track was already wrong). An untrusted track that keeps
-  rejecting matches pointing to one place gives up its belief and lets that
-  place compete for confirmation.
-* **Estimator bugs hide behind matches.** Dead reckoning without matches
-  exposed four, each of which made the error explode while the sigma
-  collapsed: old information was forgotten a little more every frame, a
-  missing odometry step at the window's edge erased the position, the
-  velocity prior pulled the odometry scale to zero, and a full step could
-  push the scale through zero. Six minutes of pure dead reckoning on either
-  flight now stays within three sigmas from every start tried.
-* **Wind turns with the aircraft.** The crab angle flips from one leg to the
-  next (yaw minus track went from +19° to −14° in one turn), so body-frame
-  velocity changes in every turn. A stiffer velocity prior left dead
-  reckoning 36 m off 10 s into a bank with a 16 m sigma; the looser one,
-  21 m.
-* **ArduPilot logs nonsense at gimbal lock.** A servo mount pointing straight
-  down logs roll −90, yaw −90 for a camera at roll 0, yaw 3. Those samples
-  inherit roll and yaw.
-* **A compass rules out turning around.** Line-dominated ground matches
-  almost as well turned 180°, so the wide search used to propose every
-  candidate both ways. After a U-turn on flight 2 the track was lost, the
-  search around its dead-reckoned position proposed a candidate turned 150°
-  from the compass, it won the quick reacquisition near the lost track, and
-  the new track flew backwards, up to 900 m off with a sigma of tens of
-  metres. Turned-around candidates are now proposed only where the heading
-  is unknown.
-* **Every candidate flies at its own height.** Odometry runs once per frame,
-  at the height above the ground under the most likely position. While
-  candidates compete that is the leading one, and on flight 2 a wrong lead
-  1.9 km away over higher ground put the aircraft 19 to 37 m above the
-  ground instead of about 80: the true candidate, moved at a quarter of its
-  speed, kept losing its matches. Each candidate's odometry now scales by
-  its own height above the ground.
-* **A scale at the edge is a bound.** Each match tries three heights (the
-  running estimate and 6% either side) and the estimate follows the best. At
-  50 m the score hardly depends on the height at the right place, but a few
-  metres off it rises steadily towards the smallest footprint: the lowest
-  height won frame after frame, the estimate fell 1.2% a frame from 1.04 to
-  0.84 in 7 s, and odometry, measured at that height, read 18% short. A win
-  at the edge of the three is now learned from at a quarter of the weight,
-  which still follows a real change (a terrain-following DJI flight's height
-  moved 10% in its first minute). In simulation this took
-  `stress_gnss_lost_low` from 75% to 96% covered; on real flights it raised
-  flight 2 by about 11 points and BAMBI, over two samples, from 55% to 71%,
-  with flight 1 unchanged. A review of the diagnosis suggested instead
-  holding odometry's height fixed for each track and leaving the
-  error to the window's odometry scale; that matched in simulation but put
-  trusted positions past 25 m on flight 1 (0.3%), so it was not kept.
-* **Ridges.** Along a straight field edge the correlation peak is a line;
-  each match reports its peak's spread, and the estimator uses it.
-* **Sync is attitude, and so are banks.** 0.3 s of clock error gives every
-  frame the bank angle of another moment. Half the confident matches above
-  20° of bank were 20 m or more off, so only odometry runs beyond 30°, or
-  beyond 20° while rolling.
-* **Barometers measure from the takeoff point.** DJI's `rel_alt` read a
-  median 42 m too high on a terrain-following survey, and over flight 2's
-  valley the height above home was up to 23 m off the ground. Copernicus
-  GLO-30 at the GNSS position agrees with ArduPilot's own terrain database to
-  a median of 1 to 2 m on both PinPoint flights, and pharos looks it up at
-  its own position instead. Over a steep valley side a position error becomes
-  a height error (a track 40 m off read the ground 10 to 15 m wrong), so the
-  terrain is averaged over where the aircraft may be.
-* **Photo GPS altitude was above the ellipsoid, not sea level** (34 m, a
-  50% scale error at 100 m), and the eBee's camera attitude convention had to
-  be read from the data. The map whose season matches the flight wins.
-* **Tried and rejected:** averaging aligned score maps over several frames
-  (flight 1 live coverage 70% to 62%, misleading 0.5% to 1.4%); a 12 m trust
-  threshold (flight 2 misleading 6.3%); counting nearby matches as only
-  partly correlated (more coverage, but look-alike runs back: flight 1
-  misleading 0.4% to 0.9%); full confirmation for a place that
-  contradicted a coasting track (flight 2 live coverage 40% to 21%);
-  keeping a lost track's place open for 300 s instead of 60 s (no gain
-  across two samples of flight 2); a higher score floor for matches (0.25
-  instead of 0.18: on real footage it cut look-alikes passing a candidate's
-  local check from 5 to 11% to about 1.5%, but whole runs did not improve and
-  the simulator lost coverage); letting a strongly scoring match count with
-  less margin over its search window around a trusted track (better on
-  flight 2, but on the BAMBI flight it took a match 10.6 m off during an
-  odometry drift and trusted 0.7% of live frames wrongly; it stays an option, `track_strong_score`, off by default);
-  letting a ridge's peak count across it (`matcher.ridge_excess`: low over
-  pasture one hedge can fill the frame and the true peak stands out only
-  across it; in simulation pasture at 40 m went from 50% to 64% covered and
-  bog from 62% to 75%, and live trust at Klagenfurt from 16% to 24%, but on
-  PinPoint 2, even only in frames under 50 m, coverage fell from 91% and 95%
-  to 82% and 55% after the flight); each candidate keeping its own altitude
-  scale (`candidate_scales`: heights 30 m high went from 10% to 78% covered
-  in simulation and a far spoofed start from 59% to 70%, but PinPoint 1 fell
-  from 92% to 86% and one start of PinPoint 2 from 91% to 85%, with 0.1%
-  live misleading); correcting heights from the start's speed when the takeoff
-  is known (see the Vienna forest above).
-
-## Next steps
-
-* **Acquisition speed.** A whole-map search normalizes the frame-shaped
-  template once per heading and takes about twice as long as with the disk;
-  a nadir footprint is symmetric, so half of those could be shared.
-* **More information per match.** Over flight 2's valley the true place
-  still stands out in only 62% of frames. Stitching consecutive frames into a
-  longer template did not help in simulation (no change over pasture, mixed
-  to worse over uplands); learned features behind the `Matcher` protocol are
-  the next lever.
-* **A first position from low down.** At 40 m a cold start takes 45 to 60 s
-  in simulation, against none from a known start: wrong candidates fill
-  every slot and the true one, which the global search keeps finding again,
-  is dropped. Traced on one 40 m flight, the true candidate died after 5 s
-  without a match over hedges although its matches were right (under a
-  metre off, scoring 0.7 to 0.8): one straight hedge filled the frame, and
-  the peak stood out only across it (ridge excess, tried above, helped there
-  but not on PinPoint 2). Two options aim at this, both off by default. `evict_stale`
-  (a new candidate replaces one that can no longer confirm) raised bog at
-  40 m from 62% to 82% and pasture at 60 m from 85% to 88% in simulation,
-  with nothing worse, but left pasture at 40 m at 50%; on the real flights
-  it averaged 77% against 81% over four runs of flight 2 (one sample up 12
-  points, the other down 16), was neutral on flight 1 and BAMBI, and still
-  confirmed nothing on BAMBI from a cold start. `refound_distinct: 3`
-  changed no simulated flight at all.
-* **An Irish flight.** The Irish scenarios are simulated. The test that
-  counts is a real flight over Irish pasture or bog against a free map of
-  it, which in Ireland means surveying the area once yourself (see
-  [docs/data.md](docs/data.md)).
-* **Finer terrain, and canopy.** Copernicus GLO-30 is a 30 m model: cliffs,
-  buildings and tree lines are smoothed out of it, and over a forest west of
-  Vienna it put the canopy about 3 m above the ground, which made a flight
-  38 m up measure its steps at the wrong height. A national lidar model
-  (`--dem`, often 1 m) would capture them where a low flight sees them, and
-  free global canopy-height maps (10 m from ETH Zurich, 1 m from Meta and
-  WRI) could raise the terrain to the crowns where there is no lidar.
-* **Lens distortion:** consumer cameras need undistorting; it matters most at
-  the image edges a banked view relies on.
-* **More real flights:** a DJI MP4 + SRT gives ground truth for free.
-
-## Layout
-
-```
-src/pharos/
-  geometry.py  geomap.py  terrain.py  types.py  recording.py  config.py  cli.py
-  footage.py  analyze.py  telemetry.py  sync.py
-  vision/   rectify, features, correlate, matcher, odometry
-  nav/      filter, window, localizer
-  sim/      world, appearance, trajectory, flight, scenario, scenarios/*.yaml
-  eval/     metrics, plot, bench, export
-  server/   app, feeds, store, static/ (dashboard)
-docs/       laptop setup, architecture, data sources
-tests/
-Dockerfile  compose.yaml
-```
+- A real flight over Irish pasture or bog (those scenarios are simulated so far)
+- Faster first fix at low altitude
+- Learned features as an optional matcher
+- Finer terrain models and lens distortion correction
 
 ## License
 
-Copyright (C) 2026 Ahroon Santhosh.
-
-Pharos is free software under the [GNU Affero General Public License v3.0](LICENSE)
-(AGPL-3.0-only): you may use, study, change and share it, and if you
-distribute it, or let others use a changed version over a network, you must
-publish your source under the same licence. To build pharos into a
-proprietary product or service instead, a commercial licence is available
-from Heloria Labs: contact [@ahroonsanthosh](https://github.com/ahroonsanthosh).
-Outside contributions are accepted under a contributor licence agreement,
-so that both licences stay possible.
+Copyright (C) 2026 Ahroon Santhosh. Free software under the
+[GNU AGPL v3.0](LICENSE). A commercial licence for proprietary use is
+available from Heloria Labs: contact
+[@ahroonsanthosh](https://github.com/ahroonsanthosh). Outside contributions
+are accepted under a contributor licence agreement.
