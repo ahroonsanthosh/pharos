@@ -1,0 +1,5 @@
+# Took off from a hill 30 m above the survey ground, and pharos is not told where: on
+# flat ground with no terrain to correct them, every height reads 30 m (27%) high.
+base: ireland_pasture
+name: stress_takeoff_hill
+telemetry: {altitude_offset_m: 30}

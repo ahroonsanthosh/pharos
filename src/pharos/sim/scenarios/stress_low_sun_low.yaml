@@ -1,0 +1,6 @@
+# A winter afternoon at 50 m: the sun 6 degrees up casts long hedge shadows that the
+# summer map lacks.
+base: ireland_pasture
+name: stress_low_sun_low
+flight_look: {sun_elevation_deg: 6, overcast: 0.0}
+trajectory: {altitude: 50, altitude_variation: 3}

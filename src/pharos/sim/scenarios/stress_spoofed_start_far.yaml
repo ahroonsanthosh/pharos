@@ -1,0 +1,5 @@
+# As stress_spoofed_start, but the spoofer had pulled the fix 120 m off.
+base: ireland_pasture
+name: stress_spoofed_start_far
+known_start_m: 10
+known_start_error_m: [120, 0]

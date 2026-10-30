@@ -68,7 +68,11 @@ the elevation is 0.
 `--dem file.tif` uses any other elevation GeoTIFF instead, in any CRS, such
 as a national lidar model at 1 m. GLO-30 and most national surface models
 include trees and buildings, which over a forest is right: the camera sees
-the canopy. `--no-terrain` takes heights above takeoff as heights above
+the canopy. At 30 m, though, GLO-30 smooths a canopy down: over a forest west
+of Vienna it stood only 3 m above the ground Airdata reports, under crowns
+perhaps 20 m tall, so a DJI flying 38 m above the ground measured its steps
+1.5 to 2 times too long. Low over forest, give a finer surface model with
+`--dem`. `--no-terrain` takes heights above takeoff as heights above
 ground, as if the ground were level.
 
 ## Flight recordings
@@ -134,7 +138,9 @@ recording format above is only needed for simulated flights.
   while the drone held 50 to 63 m above the ground. With terrain, pharos
   brought that to within 3.5 m (median) of Airdata's height above ground.
   Its `abs_alt` is above the WGS84 ellipsoid (about 47 m above sea level in
-  Austria), not sea level. `gb_yaw` is the camera's compass heading, so a
+  Austria), not sea level. Phantom 4 subtitles (`RTK (lon, lat, alt)` or
+  `GPS (...)`, `H` above home, `G.PRY` gimbal angles) are read too.
+  `gb_yaw` is the camera's compass heading, so a
   drone flying sideways on a mission with a fixed heading is handled. A video
   started in the air does not show where the drone took off; the first row
   of an Airdata CSV export does (`--takeoff LAT LON`).

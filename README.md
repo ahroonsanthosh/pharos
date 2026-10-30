@@ -17,9 +17,9 @@ position is reported as trusted only when independent evidence supports it.
 | River valley survey, fixed-wing, 15 min | 91% | 52% | none (1 frame in another run) |
 
 *Share of the flight with a trusted position within 25 m of GPS, from the
-video alone.* In simulation, none of 27 scenarios (from snow, dusk haze and
-spring clouds to Irish bog, 200 m uplands, a frozen video link and GNSS
-jammed at 50 m) trusts a wrong position.
+video alone.* In simulation, none of 31 scenarios (from snow, dusk haze and
+spring clouds to Irish bog, 200 m uplands, a frozen video link, GNSS
+jammed at 50 m and a last fix already spoofed) trusts a wrong position.
 
 ![Flight 1: pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
 
@@ -152,9 +152,9 @@ format.
 
 ## Benchmark
 
-Twenty-seven scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
+Thirty-one scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
 at 180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s
-at 110 m with a 16:9 camera, and the ten `stress_` ones as their files say)
+at 110 m with a 16:9 camera, and the fourteen `stress_` ones as their files say)
 over a 1.6 km × 1.6 km world, localized at 2 Hz against a summer
 reference map, from a cold start (no initial position) except where a stress
 scenario starts from a last GNSS fix:
@@ -244,7 +244,7 @@ uplands are the hard case for the search without a position, over relief:
 there the previous search covered 60 to 90% (mean 82%), and its two
 hardest worlds rose from 60 and 72% to 77 and 80%.
 
-**When things go wrong.** Ten `stress_` scenarios, mostly over Irish
+**When things go wrong.** Fourteen `stress_` scenarios, mostly over Irish
 pasture, put a flight through what goes wrong in practice. A rain-spotted
 lens (`stress_rain`), a coast at another tide than the map (`stress_tide`,
 the shoreline 15 m inland), hovers of 20 and 10 s (`stress_hover`) and a descent
@@ -272,6 +272,20 @@ real-flight runs it changed the status of 3 live frames out of about 9,000.
 The drift itself came from odometry reading 18% short, and that from the
 altitude scale learned from matches (see "A scale at the edge is a bound"
 below); with that fixed the run covers 96%.
+
+Four more test the start and the light. A last GNSS fix that a spoofer had
+already pulled 60 or 120 m off, while it still claimed 10 m
+(`stress_spoofed_start`, `stress_spoofed_start_far`), is never followed into
+a wrong trusted position: the track coasts with its sigma until matches
+place it, trusted after 16 and 50 s. Heights read 30 m high, from a takeoff
+on a hill pharos was not told about, over flat ground with no terrain to
+correct them (`stress_takeoff_hill`), leave the flight 10% covered: the wide
+search finds the place at once, but each candidate's later matches search
+only 6% either side of one shared altitude scale, and it takes 107 s to
+confirm. A winter sun 6° up at 50 m (`stress_low_sun_low`) casts hedge
+shadows the summer map lacks, and nothing is confirmed in two minutes. Both
+are honest failures: nothing wrong is trusted, and they are left in the
+table as limits.
 
 The simulator is still kinder than reality: the map and the drone view share
 exact geometry, and the localizer knows the very terrain the frames were
@@ -366,6 +380,33 @@ within 25 m in 93% of frames. Started half a second later, it covered 67%
 and 63%, again with nothing wrong and everything within three sigmas. See
 [docs/data.md](docs/data.md#from-real-hardware) for how to fly and record
 for pharos.
+
+**More DJI footage.** Three more clips, each against a free map with its
+GNSS used only to score:
+
+* *Meadows near Klagenfurt at 30 m* (BAMBI flight 271, Mavic 3T, June 2023,
+  basemap.at at 0.3 m, takeoff from the Airdata log's first row). From a
+  known start pharos had a position within 25 m of GNSS in 99.9% of frames
+  after the flight and 97.8% live, median error 1.7 m, trusted 32% of the
+  time (16% live), nothing wrong and every position within three sigmas.
+  From a cold start nothing was confirmed: the flight stays in a 200 × 130 m
+  patch, short of the 120 m a candidate must fly to be confirmed.
+* *Forest west of Vienna, 38 m above the ground* (BAMBI flight 2, July
+  2023). From a known start, trusted only 5% of the time and within 25 m
+  in 39% of frames, but nothing wrong and every position within three
+  sigmas. Odometry here is measured at the wrong height: the Copernicus
+  model, at 30 m, puts the forest canopy only 3 m above the ground Airdata
+  reports, while the frames show crowns perhaps 20 m below the camera, so
+  every step reads 1.5 to 2 times too long. A check of the first 3 s of
+  odometry against the start's GNSS speed fixed this flight (86% within
+  25 m), but the same check fired wrongly on PinPoint 1, whose speed fell
+  15% in those 3 s, so it was not kept (see Next steps for a canopy model).
+* *A Phantom 4 RTK at 16 m with the camera 45° from straight down* (a
+  public calibration clip from Seoul, Zenodo, CC BY 4.0, with RTK truth and
+  a 3 cm basemap). Matching was allowed up to 50° of tilt (the default is
+  30°). Nothing was trusted in four minutes over a small lawn, but every
+  position stayed within 4.9 m of RTK (median 2.9 m) against a reported
+  sigma of about 6 m. Pharos now reads the Phantom 4's subtitle format.
 
 ### Data and workflow
 
@@ -478,7 +519,18 @@ to about 6 m).
   the simulator lost coverage); letting a strongly scoring match count with
   less margin over its search window around a trusted track (better on
   flight 2, but on the BAMBI flight it took a match 10.6 m off during an
-  odometry drift and trusted 0.7% of live frames wrongly; it stays an option, `track_strong_score`, off by default).
+  odometry drift and trusted 0.7% of live frames wrongly; it stays an option, `track_strong_score`, off by default);
+  letting a ridge's peak count across it (`matcher.ridge_excess`: low over
+  pasture one hedge can fill the frame and the true peak stands out only
+  across it; in simulation pasture at 40 m went from 50% to 64% covered and
+  bog from 62% to 75%, and live trust at Klagenfurt from 16% to 24%, but on
+  PinPoint 2, even only in frames under 50 m, coverage fell from 91% and 95%
+  to 82% and 55% after the flight); each candidate keeping its own altitude
+  scale (`candidate_scales`: heights 30 m high went from 10% to 78% covered
+  in simulation and a far spoofed start from 59% to 70%, but PinPoint 1 fell
+  from 92% to 86% and one start of PinPoint 2 from 91% to 85%, with 0.1%
+  live misleading); correcting heights from the start's speed when the takeoff
+  is known (see the Vienna forest above).
 
 ## Next steps
 
@@ -493,7 +545,11 @@ to about 6 m).
 * **A first position from low down.** At 40 m a cold start takes 45 to 60 s
   in simulation, against none from a known start: wrong candidates fill
   every slot and the true one, which the global search keeps finding again,
-  is dropped. Two options aim at this, both off by default. `evict_stale`
+  is dropped. Traced on one 40 m flight, the true candidate died after 5 s
+  without a match over hedges although its matches were right (under a
+  metre off, scoring 0.7 to 0.8): one straight hedge filled the frame, and
+  the peak stood out only across it (ridge excess, tried above, helped there
+  but not on PinPoint 2). Two options aim at this, both off by default. `evict_stale`
   (a new candidate replaces one that can no longer confirm) raised bog at
   40 m from 62% to 82% and pasture at 60 m from 85% to 88% in simulation,
   with nothing worse, but left pasture at 40 m at 50%; on the real flights
@@ -505,9 +561,13 @@ to about 6 m).
   counts is a real flight over Irish pasture or bog against a free map of
   it, which in Ireland means surveying the area once yourself (see
   [docs/data.md](docs/data.md)).
-* **Finer terrain.** Copernicus GLO-30 is a 30 m model: cliffs, buildings
-  and tree lines are smoothed out of it. A national lidar model (`--dem`, often
-  1 m) would capture them where a low flight sees them.
+* **Finer terrain, and canopy.** Copernicus GLO-30 is a 30 m model: cliffs,
+  buildings and tree lines are smoothed out of it, and over a forest west of
+  Vienna it put the canopy about 3 m above the ground, which made a flight
+  38 m up measure its steps at the wrong height. A national lidar model
+  (`--dem`, often 1 m) would capture them where a low flight sees them, and
+  free global canopy-height maps (10 m from ETH Zurich, 1 m from Meta and
+  WRI) could raise the terrain to the crowns where there is no lidar.
 * **Lens distortion:** consumer cameras need undistorting; it matters most at
   the image edges a banked view relies on.
 * **More real flights:** a DJI MP4 + SRT gives ground truth for free.
