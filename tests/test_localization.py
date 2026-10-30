@@ -7,7 +7,7 @@ import pytest
 
 from pharos.eval.bench import localize
 from pharos.eval.metrics import evaluate
-from pharos.nav.localizer import Localizer
+from pharos.nav.localizer import Localizer, LocalizerConfig
 from pharos.types import Status
 from pharos.vision.matcher import CorrelationMatcher, SearchRegion
 
@@ -132,7 +132,6 @@ def test_whole_flight_solve_covers_at_least_the_live_track(small_sim):
 def test_lost_track_keeps_dead_reckoning_and_reacquires(small_sim):
     """A blackout beyond the coast limit: the position stays reported with an honest
     uncertainty, and a new track is confirmed soon after the frames come back."""
-    from pharos.nav.localizer import LocalizerConfig
     from pharos.types import Frame
 
     geomap, rec = small_sim
@@ -360,7 +359,6 @@ def test_a_known_start_is_tracked_from_the_first_frame(small_sim):
 
 def test_a_known_start_survives_frames_without_odometry(small_sim):
     """Before odometry says how fast it flies, the track is bounded by how fast it can."""
-    from pharos.nav.localizer import LocalizerConfig
 
     geomap, rec = small_sim
     g = rec.truth[0]

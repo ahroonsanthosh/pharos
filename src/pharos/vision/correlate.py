@@ -112,6 +112,40 @@ def peak_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
     return float((score[r, c] - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
 
 
+def ridge_excess(score: np.ndarray, r: int, c: int, rho: float) -> float:
+    """``peak_excess`` across a ridge: against the offsets away from the ridge's line.
+
+    A straight edge seen along its length scores almost as well anywhere along it,
+    so measured against its whole window the true peak hardly stands out, though it
+    fixes the position across the edge (low over pasture one hedge fills the frame).
+    Scored instead against offsets more than three correlation lengths off the line
+    the ridge runs along, it stands out as much as the edge does. For a peak that is
+    not elongated this is ``peak_excess``.
+    """
+    noise = _noise(score, r, c, rho)
+    if noise is None:
+        return 0.0
+    mu, sigma, _ = noise
+    peak = score[r, c]
+    rows, cols = np.nonzero(score >= peak - max(sigma, 0.1 * (peak - mu)))
+    d = np.column_stack([rows - r, cols - c]).astype(float)
+    ev, vec = np.linalg.eigh(d.T @ d / len(d))
+    if ev[1] <= 4 * max(ev[0], 1e-9):
+        return peak_excess(score, r, c, rho)
+    across = vec[:, 0]  # unit normal to the ridge, (row, col)
+    yy, xx = np.indices(score.shape)
+    off = np.abs((yy - r) * across[0] + (xx - c) * across[1])
+    far = (off > 3 * rho) & (score > -1)
+    n = int(far.sum())
+    if n < 20:
+        return 0.0
+    vals = score[far]
+    mu = float(np.median(vals))
+    sigma = 1.4826 * float(np.median(np.abs(vals - mu))) + 1e-6
+    n_eff = max(n / (np.pi * rho**2), 2.0)
+    return float((peak - mu) / sigma - np.sqrt(2 * np.log(n_eff)))
+
+
 def peak_covariance(
     score: np.ndarray, r: int, c: int, rho: float, open_variance: float = 0.0
 ) -> np.ndarray:

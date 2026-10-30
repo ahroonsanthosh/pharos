@@ -36,9 +36,12 @@ On public real-world flights, with GPS used only to score the result:
 | Farmland survey, fixed-wing, 13 min     |                                92% |             63% |              none |
 | River valley survey, fixed-wing, 15 min |                                91% |             52% |              none |
 
-In simulation, across 27 scenarios (snow, haze, low sun, clouds on the map,
-Irish bog and uplands, a frozen video link, GPS jammed at 50 m and more),
-Pharos never trusts a wrong position. Reproduce it with `pharos bench`.
+In simulation, across 31 scenarios (snow, haze, low sun, clouds on the map,
+Irish bog and uplands, a frozen video link, GPS jammed at 50 m, a last GPS
+fix that was already spoofed and more), Pharos never trusts a wrong
+position. Reproduce it with `pharos bench`. The full benchmark table, every
+real flight (including DJI footage from 16 to 92 m) and what was tried and
+dropped are in [docs/results.md](docs/results.md).
 
 ## Try it
 

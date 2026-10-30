@@ -1,0 +1,6 @@
+# The last GNSS fix before jamming was already spoofed: 60 m off, though still claimed
+# good to 10 m. Irish pasture.
+base: ireland_pasture
+name: stress_spoofed_start
+known_start_m: 10
+known_start_error_m: [60, 0]

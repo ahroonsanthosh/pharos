@@ -77,17 +77,23 @@ class ManualTelemetry:
 
 _SRT_TIME = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->")
 _SRT_NUMBER = re.compile(r"([A-Za-z_]+)\s*:\s*(-?\d+(?:\.\d+)?)")
-_SRT_LEGACY_GPS = re.compile(r"GPS\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)")
+_SRT_LEGACY_GPS = re.compile(r"(?:GPS|RTK)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)")
 _SRT_LEGACY_BARO = re.compile(r"BAROMETER\s*:\s*(-?[\d.]+)")
 _SRT_LEGACY_HOME = re.compile(r"HOME\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)")
+# Phantom 4 style: "H 16.18m" above home, "G.PRY (-44.7°, 0.0°, -164.6°)" gimbal angles
+_SRT_PHANTOM_HEIGHT = re.compile(r"\bH\s+(-?[\d.]+)\s*m\b")
+_SRT_PHANTOM_GIMBAL = re.compile(
+    r"G\.PRY\s*\(\s*(-?[\d.]+)°?\s*,\s*(-?[\d.]+)°?\s*,\s*(-?[\d.]+)°?\s*\)"
+)
 
 
 class SrtTelemetry:
     """Per-frame telemetry from the ``.SRT`` file DJI drones record next to each video.
 
     Handles the bracketed format of recent models (``[rel_alt: 120.5 ...]``,
-    ``[gb_pitch: -90.0 ...]``) and the older ``GPS(lon,lat,alt) BAROMETER:h``
-    format. Heights are above the takeoff point, also on terrain-following
+    ``[gb_pitch: -90.0 ...]``), the older ``GPS(lon,lat,alt) BAROMETER:h``
+    format and the Phantom 4's ``RTK (lon, lat, alt) ... H 16.18m ... G.PRY
+    (pitch, roll, yaw)``. Heights are above the takeoff point, also on terrain-following
     missions. The takeoff point is the older format's ``HOME``, or the first
     position if the video starts on the ground.
     """
@@ -133,11 +139,15 @@ def parse_dji_srt(text: str) -> list[tuple[float, TelemetrySample]]:
             lon, lat = float(gps.group(1)), float(gps.group(2))
         if (baro := _SRT_LEGACY_BARO.search(block)) is not None:
             altitude = float(baro.group(1))
+        if (height := _SRT_PHANTOM_HEIGHT.search(block)) is not None:
+            altitude = float(height.group(1))
         if altitude is None:
             continue
 
         gimbal_pitch = values.get("gb_pitch", -90.0)
         yaw = values.get("gb_yaw")
+        if (gimbal := _SRT_PHANTOM_GIMBAL.search(block)) is not None:
+            gimbal_pitch, values["gb_roll"], yaw = map(float, gimbal.groups())
         telemetry = Telemetry(
             altitude=altitude,
             yaw=None if yaw is None else math.radians(yaw),

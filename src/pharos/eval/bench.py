@@ -47,6 +47,8 @@ def run_scenario(sc: Scenario, cfg: LocalizerConfig | None = None) -> RunResult:
     start = None
     if sc.known_start_m is not None and len(rec.truth) > 1:
         off = np.random.default_rng(sc.seed).normal(0.0, sc.known_start_m, 2)
+        if sc.known_start_error_m is not None:
+            off = np.asarray(sc.known_start_error_m, float)
         a, b = rec.truth[:2]
         velocity = ((b.x - a.x) / (b.t - a.t), (b.y - a.y) / (b.t - a.t))
         start = ((a.x + off[0], a.y + off[1]), sc.known_start_m, velocity)
@@ -87,6 +89,7 @@ def table_header() -> str:
 
 
 def table_row(r: RunResult) -> str:
-    values = [(r.metrics[key], fmt) for key, _, fmt in _COLUMNS]
+    # a flight never trusted has no trusted positions to check against their sigmas
+    values = [(r.metrics.get(key, math.nan), fmt) for key, _, fmt in _COLUMNS]
     cells = ["-" if math.isnan(v) else fmt.format(v) for v, fmt in values]
     return f"| {r.name} | " + " | ".join(cells) + " |"
