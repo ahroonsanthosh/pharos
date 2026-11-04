@@ -404,8 +404,25 @@ function stopCamera() {
   state.camera = null;
 }
 
+// ---------------------------------------------------------------- public server
+
+// A public server takes demo flights, this browser's camera and uploads only.
+async function applyServerMode() {
+  try {
+    if (!(await api("/api/info")).public) return;
+  } catch {
+    return;
+  }
+  const allowed = { kind: ["demo", "browser", "file"], telemetry: ["manual", "srt"] };
+  for (const [name, keep] of Object.entries(allowed)) {
+    for (const opt of [...form[name].options]) if (!keep.includes(opt.value)) opt.remove();
+  }
+  $("#public-note").hidden = false;
+}
+
 // ---------------------------------------------------------------- start
 
+applyServerMode();
 refreshFeeds();
 setInterval(refreshFeeds, 2000);
 setInterval(pollRecords, 500);

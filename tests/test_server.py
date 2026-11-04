@@ -104,3 +104,35 @@ def test_http_api(small_sim, tmp_path):
         assert client.post("/api/feeds", json={"source": "x", "bogus": 1}).status_code == 422
         assert client.delete(f"/api/feeds/{feed_id}").status_code == 200
         assert client.get("/api/feeds").json() == []
+
+
+def test_a_public_server_runs_demos_and_uploads_only(tmp_path):
+    client = TestClient(create_app(tmp_path, public=True))
+    info = client.get("/api/info").json()
+    assert info["public"] and "data_dir" not in info
+    refused = [
+        {"source": "/etc/hostname", "map": "x"},  # a path on the server
+        {"source": "rtsp://10.0.0.1/stream", "map": "x"},  # a URL the server would fetch
+        {"source": "0", "map": "x"},  # a camera attached to the server
+        {"source": f"demo:{tmp_path / 'any.yaml'}"},  # a scenario file, not a built-in one
+        {"source": "browser", "map": "x", "telemetry": "mavlink:udpin:0.0.0.0:14551"},
+        {"source": "browser", "map": "x", "telemetry": "srt:/etc/hostname"},
+    ]
+    for body in refused:
+        assert client.post("/api/feeds", json=body).status_code == 403, body
+    path = client.post("/api/uploads", files={"files": ("clip.mp4", b"not a video")}).json()["path"]
+    assert client.post("/api/feeds", json={"source": path, "map": "x"}).status_code == 200
+    too_fast = {"source": "browser", "map": "x", "rate_hz": 30}
+    assert client.post("/api/feeds", json=too_fast).status_code == 422
+
+
+def test_a_public_server_limits_running_feeds(small_sim, tmp_path):
+    app = create_app(tmp_path, public=True)
+    app.state.store.add("area", small_sim[0])
+    client = TestClient(app)
+    feed = {"source": "browser", "map": "area"}
+    for _ in range(2):  # browser feeds wait for frames, so they keep running
+        assert client.post("/api/feeds", json=feed).status_code == 200
+    assert client.post("/api/feeds", json=feed).status_code == 429
+    for f in app.state.feeds.values():
+        f.stop()

@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,16 @@ from pharos.sim.scenario import builtin_scenarios
 from pharos.telemetry import ManualTelemetry
 
 STATIC = Path(__file__).parent / "static"
+# Public mode (PHAROS_PUBLIC=1, for a server anyone can reach): visitors may only run
+# the built-in demo flights, their own browser camera, or footage they upload here.
+# No paths on the server, stream URLs, attached cameras or MAVLink, and bounded use.
+PUBLIC_MAX_UPLOAD_MB = 500  # per file
+PUBLIC_MAX_UPLOADS_MB = 4000  # everything uploaded, maps included
+PUBLIC_MAX_ACTIVE = 2  # feeds running at once
+PUBLIC_MAX_FEEDS = 12  # feeds kept listed; the oldest finished ones go first
+PUBLIC_MAX_FEED_S = 15 * 60  # a feed is stopped after this long
+PUBLIC_MAX_RATE_HZ = 4.0
+
 _EXPORTS = {
     "geojson": (to_geojson, "application/geo+json"),
     "kml": (to_kml, "application/vnd.google-earth.kml+xml"),
@@ -32,13 +43,32 @@ _EXPORTS = {
 }
 
 
-def create_app(data_dir: str | Path) -> FastAPI:
+def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
+    if public is None:
+        public = os.environ.get("PHAROS_PUBLIC", "") not in ("", "0", "false")
     data = Path(data_dir)
     uploads = data / "uploads"
     uploads.mkdir(parents=True, exist_ok=True)
     store = MapStore(data / "maps")
     feeds: dict[str, Feed] = {}
+    started: dict[str, float] = {}  # feed id -> monotonic start time
     ids = itertools.count(1)
+    limit = PUBLIC_MAX_UPLOAD_MB * 2**20 if public else None
+
+    def check_space() -> None:
+        if public and _size(data) > PUBLIC_MAX_UPLOADS_MB * 2**20:
+            raise HTTPException(507, "this public server is full; try again later")
+
+    def tidy() -> None:
+        """Public mode: stop feeds that ran too long, forget the oldest finished ones."""
+        now = time.monotonic()
+        for fid, feed in feeds.items():
+            if feed.state in ("starting", "running") and now - started[fid] > PUBLIC_MAX_FEED_S:
+                feed.stop()
+        done = [fid for fid, feed in feeds.items() if feed.state not in ("starting", "running")]
+        while len(feeds) > PUBLIC_MAX_FEEDS and done:
+            fid = done.pop(0)
+            del feeds[fid], started[fid]
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -62,7 +92,9 @@ def create_app(data_dir: str | Path) -> FastAPI:
 
     @app.get("/api/info")
     def info() -> dict:
-        return {"lan_ips": _lan_ips(), "data_dir": str(data.resolve())}
+        if public:
+            return {"public": True, "lan_ips": []}
+        return {"public": False, "lan_ips": _lan_ips(), "data_dir": str(data.resolve())}
 
     # -- maps -------------------------------------------------------------
 
@@ -73,8 +105,9 @@ def create_app(data_dir: str | Path) -> FastAPI:
     @app.post("/api/maps")
     def upload_map(name: str, files: list[UploadFile]) -> dict:
         """A GeoTIFF, or a map ``.json`` sidecar together with its image."""
+        check_space()
         with tempfile.TemporaryDirectory() as tmp:
-            saved = [_save_upload(f, Path(tmp)) for f in files]
+            saved = [_save_upload(f, Path(tmp), limit) for f in files]
             main = next((p for p in saved if p.suffix.lower() in (".tif", ".tiff", ".json")), None)
             if main is None:
                 raise HTTPException(422, "upload a GeoTIFF or a .json sidecar with its image")
@@ -101,11 +134,12 @@ def create_app(data_dir: str | Path) -> FastAPI:
 
         Returns the server path to use as a feed source or telemetry file.
         """
+        check_space()
         if len(files) == 1:
-            return {"path": str(_save_upload(files[0], uploads))}
+            return {"path": str(_save_upload(files[0], uploads, limit))}
         folder = Path(tempfile.mkdtemp(prefix="photos-", dir=uploads))
         for f in files:
-            _save_upload(f, folder)
+            _save_upload(f, folder, limit)
         return {"path": str(folder)}
 
     @app.get("/api/feeds/{feed_id}/export.{fmt}")
@@ -124,6 +158,8 @@ def create_app(data_dir: str | Path) -> FastAPI:
 
     @app.get("/api/feeds")
     def list_feeds() -> list[dict]:
+        if public:
+            tidy()
         return [f.summary() for f in feeds.values()]
 
     @app.post("/api/feeds")
@@ -132,8 +168,14 @@ def create_app(data_dir: str | Path) -> FastAPI:
             spec = from_dict(FeedSpec, body)
         except (TypeError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
+        if public:
+            tidy()
+            _check_public(spec, uploads)
+            if sum(f.state in ("starting", "running") for f in feeds.values()) >= PUBLIC_MAX_ACTIVE:
+                raise HTTPException(429, "this public server is busy; stop a feed or try later")
         feed_id = f"feed-{next(ids)}"
         feeds[feed_id] = Feed(feed_id, spec, store)
+        started[feed_id] = time.monotonic()
         return feeds[feed_id].summary()
 
     @app.delete("/api/feeds/{feed_id}")
@@ -141,6 +183,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
         feed = get_feed(feed_id)
         feed.stop()
         del feeds[feed_id]
+        started.pop(feed_id, None)
         return {"deleted": feed_id}
 
     @app.get("/api/feeds/{feed_id}/records")
@@ -184,11 +227,47 @@ def create_app(data_dir: str | Path) -> FastAPI:
     return app
 
 
-def _save_upload(upload: UploadFile, folder: Path) -> Path:
+def _save_upload(upload: UploadFile, folder: Path, limit: int | None = None) -> Path:
     path = folder / safe_name(Path(upload.filename or "upload").name)
     with open(path, "wb") as out:
-        shutil.copyfileobj(upload.file, out)
+        if limit is None:
+            shutil.copyfileobj(upload.file, out)
+            return path
+        written = 0
+        while chunk := upload.file.read(2**20):
+            written += len(chunk)
+            if written > limit:
+                out.close()
+                path.unlink(missing_ok=True)
+                raise HTTPException(413, f"files over {limit // 2**20} MB are not accepted here")
+            out.write(chunk)
     return path
+
+
+def _check_public(spec: FeedSpec, uploads: Path) -> None:
+    """Refuse what a public server must not do for a visitor."""
+
+    def uploaded(path: str) -> bool:
+        p = Path(path).resolve()
+        return p.is_relative_to(uploads.resolve()) and p.exists()
+
+    source = spec.source
+    if source.startswith("demo:"):
+        if source.removeprefix("demo:") not in builtin_scenarios():
+            raise HTTPException(403, "unknown demo flight")
+    elif source != "browser" and not uploaded(source):
+        raise HTTPException(
+            403, "this public server runs demo flights, your camera and uploads only"
+        )
+    kind, _, arg = spec.telemetry.partition(":")
+    if not (kind == "manual" or (kind == "srt" and uploaded(arg))):
+        raise HTTPException(403, "telemetry here is manual or an uploaded DJI .SRT file")
+    if not 0 < spec.rate_hz <= PUBLIC_MAX_RATE_HZ:
+        raise HTTPException(422, f"rate must be above 0 and at most {PUBLIC_MAX_RATE_HZ:g} Hz")
+
+
+def _size(folder: Path) -> int:
+    return sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
 
 
 def _lan_ips() -> list[str]:

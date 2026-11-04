@@ -1,0 +1,43 @@
+name: deploy
+
+# Publishes main to a Hugging Face Space as a public demo. Needs the repository
+# secret HF_TOKEN (a Hugging Face token with write access) and the repository
+# variable HF_SPACE (e.g. "your-hf-name/pharos"); the Space is created if missing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  space:
+    runs-on: ubuntu-latest
+    if: ${{ vars.HF_SPACE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the Space
+        run: |
+          mkdir space
+          cp -r src pyproject.toml LICENSE space/
+          cp deploy/huggingface/Dockerfile deploy/huggingface/README.md space/
+          find space -name __pycache__ -prune -exec rm -rf {} +
+      - name: Upload
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          pip install --quiet "huggingface_hub>=0.25"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          api, space = HfApi(token=os.environ["HF_TOKEN"]), os.environ["HF_SPACE"]
+          api.create_repo(space, repo_type="space", space_sdk="docker", exist_ok=True)
+          api.upload_folder(
+              folder_path="space",
+              repo_id=space,
+              repo_type="space",
+              delete_patterns="*",
+              commit_message=f"Deploy {os.environ['GITHUB_SHA'][:7]}",
+          )
+          print(f"https://huggingface.co/spaces/{space}")
+          PY

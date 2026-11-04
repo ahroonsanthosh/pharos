@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.9</h1>
+<h1 align="center">Pharos 0.10</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
@@ -60,6 +60,8 @@ accuracy for yourself. Setup for each source is in
 [docs/laptop.md](docs/laptop.md).
 
 ![Adding a live feed](docs/img/feed.jpg)
+
+To put a public demo online for free, see [docs/deploy.md](docs/deploy.md).
 
 **Start from GPS** takes one fix at takeoff and never uses GPS again, so
 jamming later on can't drag it off course. The **GNSS check** then flags a

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pharos 0.9</title>
+  <title>Pharos 0.10</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
     <img class="logo" src="/static/logo.png" alt="">
-    <h1>Pharos <span class="version">0.9</span></h1>
+    <h1>Pharos <span class="version">0.10</span></h1>
     <span class="tagline">visual position from any drone feed</span>
     <a href="/api/docs" target="_blank" rel="noopener">API</a>
   </header>
@@ -24,6 +24,9 @@
         </div>
         <ul id="feed-list" class="feed-list"></ul>
         <p id="no-feeds" class="hint">No feeds yet. Start with the demo flight to see it work.</p>
+        <p id="public-note" class="hint" hidden>This is a public demo server: anyone visiting
+          sees the same feeds, and it runs demo flights, your camera and uploaded footage only.
+          For live drone feeds, run Pharos on your own laptop.</p>
       </section>
 
       <form id="feed-form" class="card" hidden>
