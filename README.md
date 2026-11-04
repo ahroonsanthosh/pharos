@@ -2,26 +2,24 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.11</h1>
+<h1 align="center">Pharos 0.11.1</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-I built Pharos because I wanted a drone to know where it is when GPS stops
-telling the truth. It looks down through the camera, compares what it sees
+I built Pharos because an operator should know where a drone is regardless of GPS availability. It looks down through the camera, compares what it sees
 with free satellite and aerial maps, and works out its position from that
 alone. Jammed, spoofed or just missing GPS, it keeps going.
 
-It runs on a normal laptop CPU. No trained models, no paid maps, no special
-hardware. You give it a video feed plus MAVLink (ArduPilot, PX4) or DJI
+It runs on a normal laptop CPU. You give it a video feed plus MAVLink (ArduPilot, PX4) or DJI
 telemetry, live or recorded, and it gives you a position.
 
 ![The Pharos dashboard tracking a demo flight](docs/img/live.jpg)
 
-## What I cared about most
+## Important to note
 
-Being honest. Every position comes with an uncertainty, and Pharos only
+Every position comes with an uncertainty, and Pharos only
 calls a position "trusted" when independent evidence backs it up. A
 navigation system that is confidently wrong is worse than having none, so
 that rule shaped almost every decision in here.
