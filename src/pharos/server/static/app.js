@@ -12,6 +12,16 @@ const state = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// What each localizer status means, in plain words.
+const STATUS_WORDS = {
+  tracking: "trusted position",
+  converging: "finding its position",
+  coasting: "coasting on odometry",
+  lost: "searching",
+};
+const says = (status) => STATUS_WORDS[status] ?? status ?? "waiting for frames";
 const form = $("#feed-form");
 const canvas = $("#map");
 const ctx = canvas.getContext("2d");
@@ -41,13 +51,18 @@ async function refreshFeeds() {
   list.replaceChildren(...state.feeds.map((f) => {
     const li = document.createElement("li");
     li.className = f.id === state.selected ? "selected" : "";
-    const status = f.last?.status && f.state === "running" ? f.last.status : f.state;
+    const status = f.last?.status && f.state === "running" ? says(f.last.status) : f.state;
     li.innerHTML = `<span class="name"></span><span class="state">${status}</span>`;
     li.querySelector(".name").textContent = f.name;
     li.onclick = () => selectFeed(f.id);
     return li;
   }));
   $("#no-feeds").hidden = state.feeds.length > 0;
+  const any = state.feeds.length > 0;
+  $("#map-empty .caption-name").textContent = any ? "pick a feed" : "no feed yet";
+  $("#map-empty .caption-sub").textContent = any
+    ? "Choose one on the left, or watch a fresh demo."
+    : "Watch Pharos find a simulated drone from its camera alone.";
   if (state.selected && !state.feeds.some((f) => f.id === state.selected)) selectFeed(null);
 }
 
@@ -87,7 +102,8 @@ async function loadMap(name) {
   img.src = `/api/maps/${encodeURIComponent(name)}/preview.jpg`;
   await img.decode();
   state.map = { info, img };
-  state.view = { zoom: Math.min(canvas.clientWidth / img.width, canvas.clientHeight / img.height), cx: img.width / 2, cy: img.height / 2 };
+  const fit = 0.9 * Math.min(canvas.clientWidth / img.width, canvas.clientHeight / img.height);
+  state.view = { zoom: fit, cx: img.width / 2, cy: img.height / 2 };
 }
 
 // ---------------------------------------------------------------- details panel
@@ -98,6 +114,8 @@ function renderDetails(feed) {
   const status = $("#status");
   const last = state.records.at(-1);
   $("#preview-empty").hidden = !!last;
+  $("#caption").hidden = !feed;
+  $("#details").classList.toggle("idle", !feed);
   if (!feed) {
     status.className = "status lost";
     status.textContent = "no feed";
@@ -105,19 +123,32 @@ function renderDetails(feed) {
     $("#manual-controls").hidden = true;
     return;
   }
+  let sub = "";
   if (feed.state === "error" || feed.error) {
     status.className = "status error";
     status.textContent = feed.error || feed.state;
+    sub = feed.error || feed.state;
+  } else if (feed.state === "starting") {
+    status.className = "status lost";
+    status.textContent = "starting";
+    sub = feed.spec.source.startsWith("demo:") ? "building the flight and its map, about 15 s" : "starting";
   } else if (feed.state !== "running") {
     status.className = `status ${last?.status ?? "lost"}`;
-    status.textContent = feed.state === "starting" ? "starting…" : `${feed.state} · ${last?.status ?? "no frames"}`;
+    status.textContent = `${feed.state}, ${says(last?.status)}`;
+    sub = `${feed.state} after ${state.records.length} frames`;
   } else if (last?.gnss_check === "disagrees") {
     status.className = "status error";
-    status.textContent = `${last.status} · GNSS disagrees by ${fmt(last.error_m, 0, " m")}: possible spoofing`;
+    status.textContent = `GPS disagrees by ${fmt(last.error_m, 0, " m")}: possible spoofing`;
+    sub = status.textContent;
   } else {
     status.className = `status ${last?.status ?? "lost"}`;
-    status.textContent = last?.status ?? "waiting for frames";
+    status.textContent = says(last?.status);
+    sub = last?.sigma_m !== undefined ? `${says(last.status)}, within ${fmt(last.sigma_m, 0, " m")}` : says(last?.status);
   }
+  $("#caption-name").textContent = feed.name.toLowerCase();
+  const caption = $("#caption-sub");
+  caption.textContent = sub;
+  caption.classList.toggle("warn", status.classList.contains("error"));
   const rows = [
     ["Latitude", last?.lat !== undefined ? last.lat.toFixed(6) : "–"],
     ["Longitude", last?.lon !== undefined ? last.lon.toFixed(6) : "–"],
@@ -176,22 +207,32 @@ function draw() {
   canvas.width = canvas.clientWidth * dpr;
   canvas.height = canvas.clientHeight * dpr;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  $("#map-empty").hidden = !!state.map;
+  $("#map-empty").hidden = !!state.map || !!state.selected;
   if (!state.map) return;
   const { img, info } = state.map;
   const located = state.records.filter((r) => r.x !== undefined);
   const last = located.at(-1);
   if ($("#follow").checked && last) [state.view.cx, state.view.cy] = toPreview(last.x, last.y);
+  // Keep the map on the page: centred while it fits, never panned past its edges.
+  const keep = (c, size, view) => (size <= view ? size / 2 : Math.min(Math.max(c, view / 2), size - view / 2));
+  state.view.cx = keep(state.view.cx, img.width, canvas.clientWidth / state.view.zoom);
+  state.view.cy = keep(state.view.cy, img.height, canvas.clientHeight / state.view.zoom);
 
   const zoom = state.view.zoom * dpr;
   const { cx, cy } = state.view;
   const screen = ([px, py]) => [(px - cx) * zoom + canvas.width / 2, (py - cy) * zoom + canvas.height / 2];
   const [ox, oy] = screen([0, 0]);
+  ctx.save();
+  ctx.shadowColor = "rgba(60, 40, 30, 0.22)";
+  ctx.shadowBlur = 28 * dpr;
+  ctx.shadowOffsetY = 10 * dpr;
   ctx.drawImage(img, ox, oy, img.width * zoom, img.height * zoom);
+  ctx.restore();
+  const colour = { tracking: css("--tracking"), converging: css("--converging"), gnss: css("--gnss") };
 
   const gnss = state.records.filter((r) => r.gnss);
   if (gnss.length > 1) {
-    ctx.strokeStyle = "#4cd07d";
+    ctx.strokeStyle = colour.gnss;
     ctx.lineWidth = 2 * dpr;
     ctx.beginPath();
     gnss.forEach((r, i) => {
@@ -202,7 +243,7 @@ function draw() {
   }
   for (const r of located) {
     const [sx, sy] = screen(toPreview(r.x, r.y));
-    ctx.fillStyle = r.status === "tracking" ? "#3b8cff" : "#ffa53b";
+    ctx.fillStyle = r.status === "tracking" ? colour.tracking : colour.converging;
     ctx.beginPath();
     ctx.arc(sx, sy, 2.5 * dpr, 0, 2 * Math.PI);
     ctx.fill();
@@ -212,13 +253,20 @@ function draw() {
     const s = img.width / info.width;
     const radius = Math.max((last.sigma_m / info.gsd) * s * zoom, 6 * dpr);
     const h = (last.heading_deg * Math.PI) / 180;
+    const marker = () => {
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius, 0, 2 * Math.PI);
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.sin(h) * 22 * dpr, sy - Math.cos(h) * 22 * dpr);
+      ctx.stroke();
+    };
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.45)"; // a dark halo keeps the white mark readable on any ground
+    ctx.lineWidth = 4 * dpr;
+    marker();
     ctx.strokeStyle = "white";
     ctx.lineWidth = 2 * dpr;
-    ctx.beginPath();
-    ctx.arc(sx, sy, radius, 0, 2 * Math.PI);
-    ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + Math.sin(h) * 22 * dpr, sy - Math.cos(h) * 22 * dpr);
-    ctx.stroke();
+    marker();
   }
 }
 
@@ -353,7 +401,7 @@ form.onsubmit = async (e) => {
   try {
     const feed = await postJson("/api/feeds", await buildSpec());
     if (feed.spec.source === "browser") await startCamera(feed.id, form.camera.value, feed.spec.rate_hz);
-    form.hidden = true;
+    showForm(false);
     showError("");
     selectFeed(feed.id);
   } catch (err) {
@@ -363,12 +411,27 @@ form.onsubmit = async (e) => {
   }
 };
 
-$("#new-feed-btn").onclick = () => {
-  form.hidden = false;
-  fillFormOptions();
-  showFormSections();
+function showForm(open) {
+  form.hidden = !open;
+  $("#new-feed-btn").classList.toggle("active", open);
+  if (open) {
+    fillFormOptions();
+    showFormSections();
+  }
+}
+$("#new-feed-btn").onclick = () => showForm(form.hidden);
+$("#cancel-btn").onclick = () => showForm(false);
+
+$("#demo-btn").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    selectFeed((await postJson("/api/feeds", { source: "demo:nominal", name: "demo flight" })).id);
+  } catch (err) {
+    $("#map-empty .caption-sub").textContent = err.message;
+  } finally {
+    e.target.disabled = false;
+  }
 };
-$("#cancel-btn").onclick = () => (form.hidden = true);
 form.kind.onchange = showFormSections;
 form.telemetry.onchange = showFormSections;
 form.push_path.oninput = showPushUrls;

@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.11.1</h1>
+<h1 align="center">Pharos 0.12</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -92,7 +92,7 @@ DJI `.SRT` file. If the drone reports GPS, I draw it next to the estimate so
 you can judge the accuracy for yourself. Setup for each source, ports and
 firewall notes are in [docs/laptop.md](docs/laptop.md).
 
-![Adding a live feed](docs/img/feed.jpg)
+![Adding a feed](docs/img/feed.jpg)
 
 **Start from GPS** takes one fix at takeoff and never uses GPS again, so
 jamming later on can't drag it off course. The **GNSS check** then flags a

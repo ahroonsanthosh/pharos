@@ -3,33 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pharos 0.11.1</title>
+  <title>Pharos 0.12</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
+  <meta name="color-scheme" content="light dark">
+  <link rel="preload" href="/static/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header>
-    <img class="logo" src="/static/logo.png" alt="">
-    <h1>Pharos <span class="version">0.11.1</span></h1>
-    <span class="tagline">visual position from any drone feed</span>
-    <a href="/api/docs" target="_blank" rel="noopener">API</a>
+  <header class="corners">
+    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Pharos <span class="version">0.12</span></h1>
+    <nav>
+      <button id="new-feed-btn" class="nav-link" type="button">New feed</button>
+      <a class="nav-link" href="/api/docs" target="_blank" rel="noopener">API</a>
+    </nav>
   </header>
 
   <main>
     <aside id="sidebar">
       <section>
-        <div class="section-head">
-          <h2>Feeds</h2>
-          <button id="new-feed-btn" class="primary">New feed</button>
-        </div>
+        <h2>Feeds</h2>
         <ul id="feed-list" class="feed-list"></ul>
-        <p id="no-feeds" class="hint">No feeds yet. Start with the demo flight to see it work.</p>
+        <p id="no-feeds" class="hint">Nothing running yet.</p>
         <p id="public-note" class="hint" hidden>This is a public demo server: anyone visiting
           sees the same feeds, and it runs demo flights, your camera and uploaded footage only.
           For live drone feeds, run Pharos on your own laptop.</p>
       </section>
 
-      <form id="feed-form" class="card" hidden>
+      <form id="feed-form" hidden>
         <h2>New feed</h2>
 
         <label>Source
@@ -128,23 +128,28 @@
     </aside>
 
     <section id="map-panel">
-      <canvas id="map"></canvas>
-      <div class="legend">
-        <span><i class="dot tracking"></i>tracking</span>
-        <span><i class="dot converging"></i>converging / coasting</span>
-        <span><i class="line gnss"></i>aircraft GNSS</span>
-        <label><input type="checkbox" id="follow" checked> follow</label>
+      <div class="stage">
+        <canvas id="map" aria-label="Map with the estimated track"></canvas>
+        <div id="map-empty" class="map-empty">
+          <p class="caption-name">no feed yet</p>
+          <p class="caption-sub">Watch Pharos find a simulated drone from its camera alone.</p>
+          <button id="demo-btn" class="primary" type="button">Start the demo flight</button>
+        </div>
       </div>
-      <p id="map-empty" class="map-empty">Select or start a feed.</p>
+      <div class="caption" id="caption">
+        <p class="caption-name" id="caption-name"></p>
+        <p class="caption-sub" id="caption-sub"></p>
+      </div>
     </section>
 
-    <aside id="details">
-      <div class="preview"><img id="preview" alt=""><span id="preview-empty">no frame yet</span></div>
+    <aside id="details" class="idle">
+      <h2>Drone view</h2>
+      <div class="preview"><img id="preview" alt="Latest camera frame"><span id="preview-empty">no frame yet</span></div>
       <div id="status" class="status lost">no feed</div>
       <dl id="readout" class="readout"></dl>
       <p id="exports" class="exports" hidden>Export track:
         <a data-fmt="geojson">GeoJSON</a> · <a data-fmt="kml">KML</a> · <a data-fmt="csv">CSV</a></p>
-      <div id="manual-controls" class="card" hidden>
+      <div id="manual-controls" hidden>
         <h2>Manual telemetry</h2>
         <div class="row">
           <label>Height (m) <input id="manual-alt" type="number"></label>
@@ -155,6 +160,15 @@
       <button id="delete-feed" class="danger" hidden>Stop and remove feed</button>
     </aside>
   </main>
+
+  <footer class="corners">
+    <div class="legend">
+      <span><i class="dot tracking"></i>trusted</span>
+      <span><i class="dot converging"></i>finding / coasting</span>
+      <span><i class="line gnss"></i>aircraft GPS</span>
+    </div>
+    <label class="check"><input type="checkbox" id="follow" checked> follow the drone</label>
+  </footer>
 
   <video id="camera-video" playsinline muted hidden></video>
   <script src="/static/app.js"></script>
