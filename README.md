@@ -1,47 +1,49 @@
-# Pharos
+<p align="center">
+  <img src="docs/img/logo.png" alt="Pharos" width="420">
+</p>
 
-[![ci](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg)](https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml)
+<h1 align="center">Pharos 0.8</h1>
 
-**GPS-free navigation for drones.** Pharos works out where a drone is by
-matching its downward camera against free satellite and aerial maps. When
-GPS is jammed, spoofed or just missing, it keeps going.
+<p align="center">
+  <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+</p>
 
-It runs on a laptop CPU. No trained models, no paid maps, no special
-hardware. Plug in any video feed with MAVLink (ArduPilot, PX4) or DJI
-telemetry, live or recorded.
+I built Pharos because I wanted a drone to know where it is when GPS stops
+telling the truth. It looks down through the camera, compares what it sees
+with free satellite and aerial maps, and works out its position from that
+alone. Jammed, spoofed or just missing GPS, it keeps going.
 
-![Pharos's estimate from video alone over the GPS track](docs/img/flight1.jpg)
+It runs on a normal laptop CPU. No trained models, no paid maps, no special
+hardware. You give it a video feed plus MAVLink (ArduPilot, PX4) or DJI
+telemetry, live or recorded, and it gives you a position.
 
-<sub>A real flight: Pharos's estimate from the video alone (blue trusted,
-orange coasting with its uncertainty) over the GPS track (green).
-Orthophoto: PNOA © Instituto Geográfico Nacional, CC BY 4.0.</sub>
+![The Pharos dashboard tracking a demo flight](docs/img/live.jpg)
 
-## Why it matters
+## What I cared about most
 
-GPS jamming and spoofing are now routine, and most drones are lost without
-it. Visual navigation exists, but it usually needs expensive maps, a GPU or
-a model trained on the area. Pharos needs none of those.
+Being honest. Every position comes with an uncertainty, and Pharos only
+calls a position "trusted" when independent evidence backs it up. A
+navigation system that is confidently wrong is worse than having none, so
+that rule shaped almost every decision in here.
 
-Just as important, it knows when it doesn't know. Every position comes with
-an honest uncertainty, and Pharos only calls a position "trusted" when
-independent evidence backs it up. A navigation system that is confidently
-wrong is worse than none.
+On public real flights (GPS used only to score it):
 
-## Results
+| Flight                                  | Trusted within 25 m | Live, in flight | Trusted but wrong |
+| --------------------------------------- | ------------------: | --------------: | ----------------: |
+| Farmland survey, fixed-wing, 13 min     |                 92% |             63% |              none |
+| River valley survey, fixed-wing, 15 min |                 91% |             52% |              none |
 
-On public real-world flights, with GPS used only to score the result:
+Across 31 simulated scenarios (snow, haze, low sun, Irish bog and uplands,
+a frozen video link, GPS jammed at 50 m, a spoofed starting fix and more)
+it never trusts a wrong position. You can check that yourself with
+`pharos bench`. The full numbers, the DJI footage I tested on and the ideas
+I tried and threw away are in [docs/results.md](docs/results.md).
 
-| Flight                                  | Trusted within 25 m (after flight) | Live, in flight | Trusted but wrong |
-| --------------------------------------- | ---------------------------------: | --------------: | ----------------: |
-| Farmland survey, fixed-wing, 13 min     |                                92% |             63% |              none |
-| River valley survey, fixed-wing, 15 min |                                91% |             52% |              none |
+![A real flight: Pharos from video alone over the GPS track](docs/img/flight1.jpg)
 
-In simulation, across 31 scenarios (snow, haze, low sun, clouds on the map,
-Irish bog and uplands, a frozen video link, GPS jammed at 50 m, a last GPS
-fix that was already spoofed and more), Pharos never trusts a wrong
-position. Reproduce it with `pharos bench`. The full benchmark table, every
-real flight (including DJI footage from 16 to 92 m) and what was tried and
-dropped are in [docs/results.md](docs/results.md).
+<sub>A real flight: Pharos from the video alone (blue trusted, orange
+coasting) over the GPS track (green). Orthophoto: PNOA © Instituto
+Geográfico Nacional, CC BY 4.0.</sub>
 
 ## Try it
 
@@ -50,66 +52,66 @@ git clone https://github.com/ahroonsanthosh/pharos.git && cd pharos
 docker compose up            # then open http://localhost:8000
 ```
 
-The dashboard takes almost any feed: a DJI controller or OBS over RTMP/SRT,
-RTSP/HLS/UDP streams, a capture card or webcam, recorded video with DJI
-`.SRT` files, or a built-in demo flight. If the drone reports GPS, it is
-drawn beside Pharos's estimate so you can see the accuracy for yourself.
+Hit **New feed** and pick the demo flight to see it work straight away. It
+also takes a DJI controller or OBS over RTMP/SRT, RTSP/HLS/UDP streams, a
+capture card or webcam, or recorded video with DJI `.SRT` files. If the
+drone reports GPS, I draw it next to the estimate so you can judge the
+accuracy for yourself. Setup for each source is in
+[docs/laptop.md](docs/laptop.md).
+
+![Adding a live feed](docs/img/feed.jpg)
 
 **Start from GPS** takes one fix at takeoff and never uses GPS again, so
-later jamming can't pull it off course. The **GNSS check** then flags a
-receiver that looks confident but is drifting away, which is what a spoofed
-one does. Setup for each source: [docs/laptop.md](docs/laptop.md).
+jamming later on can't drag it off course. The **GNSS check** then flags a
+receiver that looks confident but is drifting away, which is exactly what a
+spoofed one does.
 
-## Analyse recorded footage
+## Recorded footage
 
 ```bash
-pharos analyze DJI_0042.MP4 --map area.tif --hfov 70     # uses the .SRT beside the video
-pharos analyze photos/ --map area.tif                    # photo sets with EXIF/XMP
-pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120   # no telemetry at all
+pharos analyze DJI_0042.MP4 --map area.tif --hfov 70
+pharos analyze photos/ --map area.tif
+pharos analyze old.mp4 --map area.tif --hfov 70 --altitude 120
 ```
 
-Outputs a track as GeoJSON, KML (opens in Google Earth) and CSV, plus a
-summary. If the footage has its own GPS, the summary scores Pharos against
-it. Run `pharos --help` for syncing a separate camera to an autopilot log,
-calibrating a camera, and starting from a known position.
+You get the track as GeoJSON, KML (opens in Google Earth) and CSV, plus a
+summary that scores Pharos against the footage's own GPS if it has any.
+`pharos --help` covers syncing a camera to an autopilot log, calibrating a
+camera and starting from a known position.
 
 ## How it works
 
-1. **Rectify.** Project each camera frame onto the ground, using height and
-   tilt, through a terrain model on uneven ground.
-2. **Describe.** Turn frame and map into edge maps (roads, field
-   boundaries, buildings, shorelines) that ignore colour, season and
-   shadows.
-3. **Match.** Score every position on the map at once with FFT
-   cross-correlation, across headings and scales.
-4. **Track.** Follow several candidates until one clearly wins, then fuse
-   map matches with visual odometry, gyro and compass. When matches stop,
-   dead-reckon with a growing uncertainty.
+1. **Rectify** each frame onto the ground using height, tilt and a terrain
+   model.
+2. **Describe** frame and map as edges (roads, field boundaries, buildings,
+   shorelines) so colour, season and shadows matter less.
+3. **Match** every position on the map at once with FFT cross-correlation,
+   across headings and scales.
+4. **Track** several candidates until one clearly wins, then fuse map
+   matches with visual odometry, gyro and compass. When matches dry up it
+   dead-reckons with a growing uncertainty.
 
-Any north-up orthophoto works as a map: USGS NAIP, national programmes like
-IGN, swisstopo and PDOK, OpenAerialMap or Sentinel-2. More in
+Any north-up orthophoto works as a map: USGS NAIP, IGN, swisstopo, PDOK,
+OpenAerialMap or Sentinel-2. More detail in
 [docs/architecture.md](docs/architecture.md).
 
-## Develop
+## Working on it
 
 ```bash
 pip install -e ".[dev,server,geo]"
-pytest -q                          # tests
-pharos bench -j 4 -o runs/bench    # run every simulated scenario
-pharos serve --open                # dashboard without Docker
+pytest -q
+pharos bench -j 4 -o runs/bench
+pharos serve --open
 ```
 
-## What's next
-
-- A real flight over Irish pasture or bog (those scenarios are simulated so far)
-- Faster first fix at low altitude
-- Learned features as an optional matcher
-- Finer terrain models and lens distortion correction
+Next on my list: a real flight over Irish pasture or bog, a faster first
+fix at low altitude, learned features as an optional matcher, and lens
+distortion correction.
 
 ## License
 
 Copyright (C) 2026 Ahroon Santhosh. Free software under the
-[GNU AGPL v3.0](LICENSE). A commercial licence for proprietary use is
-available from Heloria Labs: contact
+[GNU AGPL v3.0](LICENSE). If you need it for proprietary use, a commercial
+licence is available from Heloria Labs: get in touch through
 [@ahroonsanthosh](https://github.com/ahroonsanthosh). Outside contributions
 are accepted under a contributor licence agreement.

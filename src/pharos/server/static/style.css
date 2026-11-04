@@ -19,8 +19,10 @@
 [hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
 
-header { display: flex; align-items: baseline; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 header h1 { margin: 0; font-size: 18px; letter-spacing: 0.5px; }
+header .logo { height: 22px; }
+header .version { color: var(--muted); font-weight: 400; font-size: 13px; }
 header .tagline { color: var(--muted); flex: 1; }
 header a { color: var(--muted); }
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pharos"
-version = "0.7"
+dynamic = ["version"]
 description = "Absolute visual localization of drone video against satellite imagery."
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -30,6 +30,9 @@ dev = ["pytest>=8.0", "ruff>=0.6", "httpx>=0.27"]
 
 [project.scripts]
 pharos = "pharos.cli:main"
+
+[tool.hatch.version]
+path = "src/pharos/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pharos"]

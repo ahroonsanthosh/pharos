@@ -10,6 +10,7 @@ from pathlib import Path
 
 import cv2
 
+from pharos import __version__
 from pharos.analyze import analyze, write_outputs
 from pharos.config import load_yaml
 from pharos.eval.bench import localize, run_scenarios, table_header, table_row
@@ -30,6 +31,7 @@ from pharos.types import Estimate
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pharos", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"Pharos {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("simulate", help="render a scenario to a map and a flight recording")

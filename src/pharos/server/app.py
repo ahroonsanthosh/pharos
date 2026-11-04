@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisc
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from pharos import __version__
 from pharos.config import from_dict
 from pharos.eval.export import to_csv, to_geojson, to_kml
 from pharos.server.feeds import Feed, FeedSpec
@@ -45,7 +46,7 @@ def create_app(data_dir: str | Path) -> FastAPI:
         for feed in feeds.values():
             feed.stop()
 
-    app = FastAPI(title="Pharos", docs_url="/api/docs", lifespan=lifespan)
+    app = FastAPI(title="Pharos", version=__version__, docs_url="/api/docs", lifespan=lifespan)
     app.state.store = store
     app.state.feeds = feeds
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
