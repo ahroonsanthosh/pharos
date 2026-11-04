@@ -13,7 +13,7 @@ next visit). Every push to `main` updates it through
    * add a **secret** `HF_TOKEN` with that token;
    * add a **variable** `HF_SPACE` with the Space to publish to, such as
      `your-hf-name/pharos` (the workflow creates it if it does not exist).
-4. Run the **deploy** workflow from the Actions tab, or push to `main`. The first
+4. Run the **Deploy to Hugging Face** workflow from the Actions tab, or push to `main`. The first
    build takes a few minutes; the Space is then at
    `https://huggingface.co/spaces/your-hf-name/pharos`.
 

@@ -10,6 +10,8 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "Ahroon Santhosh" }]
+keywords = ["drone", "uav", "navigation", "gnss-denied", "visual-localization"]
 dependencies = [
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
@@ -27,6 +29,10 @@ server = [  # pharos serve: live feeds and dashboard
     "pymavlink>=2.4",
 ]
 dev = ["pytest>=8.0", "ruff>=0.6", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/ahroonsanthosh/pharos"
+Documentation = "https://github.com/ahroonsanthosh/pharos/tree/main/docs"
 
 [project.scripts]
 pharos = "pharos.cli:main"

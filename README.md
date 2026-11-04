@@ -2,10 +2,10 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.10</h1>
+<h1 align="center">Pharos 0.11</h1>
 
 <p align="center">
-  <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 I built Pharos because I wanted a drone to know where it is when GPS stops
@@ -45,23 +45,56 @@ I tried and threw away are in [docs/results.md](docs/results.md).
 coasting) over the GPS track (green). Orthophoto: PNOA © Instituto
 Geográfico Nacional, CC BY 4.0.</sub>
 
-## Try it
+## Run it on your own computer
+
+Pharos is meant to run on your own machine. Nothing is sent anywhere, it
+needs no account or internet once installed, and this is the only way to
+plug in a live drone. Any recent laptop works: Windows, macOS or Linux.
+
+**With Docker (easiest).** Install
+[Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker
+Engine on Linux), then in a terminal:
 
 ```bash
-git clone https://github.com/ahroonsanthosh/pharos.git && cd pharos
-docker compose up            # then open http://localhost:8000
+git clone https://github.com/ahroonsanthosh/pharos.git
 ```
 
-Hit **New feed** and pick the demo flight to see it work straight away. It
-also takes a DJI controller or OBS over RTMP/SRT, RTSP/HLS/UDP streams, a
-capture card or webcam, or recorded video with DJI `.SRT` files. If the
-drone reports GPS, I draw it next to the estimate so you can judge the
-accuracy for yourself. Setup for each source is in
-[docs/laptop.md](docs/laptop.md).
+```bash
+cd pharos
+```
+
+```bash
+docker compose up
+```
+
+The first start builds everything and takes a few minutes; after that it
+starts in seconds. Open **http://localhost:8000** in your browser. Stop it
+with `Ctrl+C`. Your maps and uploaded videos stay in the `pharos-data`
+folder.
+
+**Without Docker.** With Python 3.11 or newer, from the `pharos` folder:
+
+```bash
+pip install -e ".[server,geo]"
+```
+
+```bash
+pharos serve --open
+```
+
+That opens the dashboard in your browser. Live streams pushed from a drone
+controller also need [MediaMTX](https://github.com/bluenviron/mediamtx/releases)
+running alongside (Docker includes it).
+
+**First run.** Click **New feed**, keep **Demo flight** and press
+**Start**. A simulated flight is generated and tracked live in about 15 s.
+After that, try your own footage: a DJI controller or OBS over RTMP/SRT,
+RTSP/HLS/UDP streams, a capture card or webcam, or recorded video with its
+DJI `.SRT` file. If the drone reports GPS, I draw it next to the estimate so
+you can judge the accuracy for yourself. Setup for each source, ports and
+firewall notes are in [docs/laptop.md](docs/laptop.md).
 
 ![Adding a live feed](docs/img/feed.jpg)
-
-To put a public demo online for free, see [docs/deploy.md](docs/deploy.md).
 
 **Start from GPS** takes one fix at takeoff and never uses GPS again, so
 jamming later on can't drag it off course. The **GNSS check** then flags a
@@ -80,6 +113,13 @@ You get the track as GeoJSON, KML (opens in Google Earth) and CSV, plus a
 summary that scores Pharos against the footage's own GPS if it has any.
 `pharos --help` covers syncing a camera to an autopilot log, calibrating a
 camera and starting from a known position.
+
+## Put it online
+
+You don't need to, but if you want others to try it in a browser, a free
+Hugging Face Space works, and pushes to `main` keep it up to date. A public
+server runs in a safe mode: demo flights, the visitor's own camera and
+uploaded footage only. Steps in [docs/deploy.md](docs/deploy.md).
 
 ## How it works
 

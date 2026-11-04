@@ -1,4 +1,4 @@
-name: deploy
+name: Deploy to Hugging Face
 
 # Publishes main to a Hugging Face Space as a public demo. Needs the repository
 # secret HF_TOKEN (a Hugging Face token with write access) and the repository

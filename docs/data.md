@@ -33,7 +33,7 @@ imagery (the Republic) is licensed, OSNI's (Northern Ireland) is sold apart
 from a 10 cm strip along the Northern Irish coast (OpenDataNI), and the EU's
 2 to 4 m Copernicus mosaic can only be viewed, not downloaded. Two free routes
 remain: map the area yourself with the drone (fly a survey grid once, with
-GNSS, and build an orthophoto with the free OpenDroneMap; pharos reads its
+GNSS, and build an orthophoto with the free OpenDroneMap; Pharos reads its
 GeoTIFF directly), or license the national imagery for the area you operate
 in. For terrain, Geological Survey Ireland publishes LiDAR elevation models
 (1 to 2 m, CC BY 4.0) where it has flown; pass one with `--dem`.
@@ -56,7 +56,7 @@ benchmark).
 
 ## Terrain
 
-Barometric heights are above the takeoff point, not the ground, so pharos
+Barometric heights are above the takeoff point, not the ground, so Pharos
 also needs the ground's elevation under the map. `pharos analyze`, `probe`
 and live feeds fetch it automatically when the telemetry's heights are above
 takeoff: **Copernicus GLO-30**, a 30 m surface model of the whole world (ESA,
@@ -123,19 +123,19 @@ recording format above is only needed for simulated flights.
   evaluation run.
 * **Height above ground:** barometric height is relative to takeoff, so it
   is wrong wherever the ground is higher or lower. With [terrain](#terrain)
-  pharos turns it into height above the ground at its own position estimate,
+  Pharos turns it into height above the ground at its own position estimate,
   which needs the takeoff point's elevation: from `--takeoff LAT LON`, from
   the telemetry when the recording starts on the ground (or MAVLink's home
   position), and otherwise learned from the first confirmed track. On two
   real flights this agreed with ArduPilot's own terrain database to a median
-  of 1 to 2 m. From an ArduPilot log pharos takes the barometric height and
+  of 1 to 2 m. From an ArduPilot log Pharos takes the barometric height and
   does its own terrain lookup, which needs no GNSS and covered more of a real
   flight. `--log-height terrain` uses the autopilot's terrain database
   instead (logged with `TERRAIN_ENABLE`, looked up at the autopilot's GNSS
-  position), which is also the fallback when pharos has no terrain.
+  position), which is also the fallback when Pharos has no terrain.
 * **DJI specifics:** the `.SRT`'s `rel_alt` is height above takeoff even on
   terrain-following missions: on a real Mavic 3T survey it read 46 to 112 m
-  while the drone held 50 to 63 m above the ground. With terrain, pharos
+  while the drone held 50 to 63 m above the ground. With terrain, Pharos
   brought that to within 3.5 m (median) of Airdata's height above ground.
   Its `abs_alt` is above the WGS84 ellipsoid (about 47 m above sea level in
   Austria), not sea level. Phantom 4 subtitles (`RTK (lon, lat, alt)` or

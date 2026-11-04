@@ -1,4 +1,9 @@
 FROM python:3.12-slim
+LABEL org.opencontainers.image.title="Pharos" \
+      org.opencontainers.image.description="GPS-free drone navigation from video and free maps" \
+      org.opencontainers.image.source="https://github.com/ahroonsanthosh/pharos" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.authors="Ahroon Santhosh"
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app

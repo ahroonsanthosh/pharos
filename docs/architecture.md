@@ -269,7 +269,7 @@ its matches measuring the height above the ground it saw. Copernicus GLO-30
 is a surface model: over forest it gives the canopy top, which is what the
 camera sees. Heights the aircraft measured above the ground itself (a
 rangefinder) are used as they are. ArduPilot's terrain database is looked up
-at the autopilot's GNSS position, so pharos prefers the barometric height and
+at the autopilot's GNSS position, so Pharos prefers the barometric height and
 its own lookup, which also covered more of a real flight (PinPoint 2: 90%
 against 77%). Over a steep slope a position error becomes a height error, so
 the terrain is averaged over the position's uncertainty: its sigma for

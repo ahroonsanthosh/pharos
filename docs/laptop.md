@@ -1,4 +1,4 @@
-# Running Pharos on a laptop
+# Running Pharos on your own computer
 
 Pharos runs as a small local service with a dashboard in your browser. It
 needs no internet once installed, and all of it is free.
@@ -25,7 +25,7 @@ needs no internet once installed, and all of it is free.
 Stop with `Ctrl+C` (or `docker compose down`). Maps and uploaded videos are
 kept in `pharos-data/` next to the code.
 
-The stack runs two containers: **pharos** (dashboard, API, localization) and
+The stack runs two containers: **Pharos** (dashboard, API, localization) and
 **MediaMTX** (receives video pushed over RTMP, SRT or RTSP).
 
 | port | used for |
@@ -159,7 +159,7 @@ ffmpeg -re -i flight.mp4 -c:v libx264 -tune zerolatency -f flv rtmp://localhost:
 * **lost**: no confident match (over featureless ground, or before the first
   fix). Pharos says so instead of guessing.
 * **Error vs GNSS** appears whenever the aircraft reports its own GPS.
-* **GNSS check** compares that GPS with pharos's own position while pharos
+* **GNSS check** compares that GPS with Pharos's own position while Pharos
   trusts it. *disagrees* (the status bar turns red) means GPS has been
   further off than both uncertainties allow for more than 3 s: a spoofed
   receiver looks like this, since it keeps a confident fix while it walks

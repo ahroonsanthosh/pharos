@@ -138,7 +138,7 @@ already pulled 60 or 120 m off, while it still claimed 10 m
 (`stress_spoofed_start`, `stress_spoofed_start_far`), is never followed into
 a wrong trusted position: the track coasts with its sigma until matches
 place it, trusted after 16 and 50 s. Heights read 30 m high, from a takeoff
-on a hill pharos was not told about, over flat ground with no terrain to
+on a hill Pharos was not told about, over flat ground with no terrain to
 correct them (`stress_takeoff_hill`), leave the flight 10% covered: the wide
 search finds the place at once, but each candidate's later matches search
 only 6% either side of one shared altitude scale, and it takes 107 s to
@@ -158,7 +158,7 @@ on flights.
 Three public datasets, all free, each localized from a cold start with no
 initial position; GNSS is used only to calibrate a camera once and to score.
 Heights are barometric, corrected with the free Copernicus terrain model at
-pharos's own position, so they need no GNSS either.
+Pharos's own position, so they need no GNSS either.
 Every frame of a flight counts. A frame is **covered** when its position is
 trusted and within 25 m of GNSS, and **misleading** when it is trusted and
 further off. A trusted position has an uncertainty of at most 10 m and two
@@ -222,17 +222,17 @@ raw DJI recordings with their `.SRT` files. One 6-minute DJI Mavic 3T segment
 orthophoto. The survey flew 55 m above the ground (each frame sees about
 70 × 40 m), mostly over continuous autumn forest and harvested fields
 against a summer map, and the true location stood out in only 12% of
-frames. From a cold start pharos never confirmed a position on it, nor
+frames. From a cold start Pharos never confirmed a position on it, nor
 reported a wrong one, even given Airdata's heights. It also showed that DJI's `rel_alt` is height above
 takeoff even on terrain-following missions: it read 46 to 112 m, a median
 42 m too high, while the drone held 50 to 63 m above the ground. With the
-Copernicus terrain model pharos brings that to within 3.5 m (median) of
+Copernicus terrain model Pharos brings that to within 3.5 m (median) of
 Airdata's height above ground, most of the rest being forest canopy, which
 the camera sees too.
 
 The segment starts in mid-air, so it is also the case `--known-start` is
 for: GNSS good at the start and lost after. From the first fixes (5 m), with
-the raw `rel_alt` and the height learned from the speed, pharos covered 75%
+the raw `rel_alt` and the height learned from the speed, Pharos covered 75%
 of the 6 minutes after the flight and 70% live, median error 1.7 m (live
 1.9 m, 95th percentile 2.9 m and 8.3 m), with no trusted position wrong and
 every position, trusted or coasting, within three sigmas; it had a position
@@ -246,7 +246,7 @@ GNSS used only to score:
 
 * *Meadows near Klagenfurt at 30 m* (BAMBI flight 271, Mavic 3T, June 2023,
   basemap.at at 0.3 m, takeoff from the Airdata log's first row). From a
-  known start pharos had a position within 25 m of GNSS in 99.9% of frames
+  known start Pharos had a position within 25 m of GNSS in 99.9% of frames
   after the flight and 97.8% live, median error 1.7 m, trusted 32% of the
   time (16% live), nothing wrong and every position within three sigmas.
   From a cold start nothing was confirmed: the flight stays in a 200 × 130 m
@@ -359,7 +359,7 @@ to about 6 m).
   median 42 m too high on a terrain-following survey, and over flight 2's
   valley the height above home was up to 23 m off the ground. Copernicus
   GLO-30 at the GNSS position agrees with ArduPilot's own terrain database to
-  a median of 1 to 2 m on both PinPoint flights, and pharos looks it up at
+  a median of 1 to 2 m on both PinPoint flights, and Pharos looks it up at
   its own position instead. Over a steep valley side a position error becomes
   a height error (a track 40 m off read the ground 10 to 15 m wrong), so the
   terrain is averaged over where the aircraft may be.
