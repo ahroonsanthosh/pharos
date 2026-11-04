@@ -439,3 +439,26 @@ def test_a_scale_at_the_edge_of_the_search_is_only_a_bound(small_sim):
     loc.scale = 1.0
     loc._learn(replace(low, scale=0.94, scale_edge=0), frame)
     assert 1.0 - edge == pytest.approx(0.25 * (1.0 - loc.scale))
+
+
+def test_confirmation_distance_counts_frame_lengths(small_sim):
+    geomap, rec = small_sim
+    loc = Localizer(geomap, rec.camera, LocalizerConfig())
+    frame = rec.frames[0]
+    tel = frame.telemetry
+    level = replace(frame, telemetry=replace(tel, altitude=40.0, pitch=0.0, roll=0.0))
+    length = loc._frame_length(level, 1.0)
+    # straight down, the image's vertical covers height * rows / focal length of ground
+    expected = 40.0 * (rec.camera.height - 1) / rec.camera.fy
+    assert length == pytest.approx(expected, rel=0.02)
+    assert loc._frame_length(level, 2.0) == pytest.approx(2 * length, rel=0.02)
+
+
+def test_a_low_flight_confirms_after_frame_lengths_not_metres(small_sim):
+    geomap, rec = small_sim
+    strict = LocalizerConfig(confirm_distance_m=1e9)  # never far enough in metres
+    assert np.isnan(evaluate(localize(geomap, rec, strict), rec.truth)["time_to_fix_s"])
+    by_frames = replace(strict, confirm_footprints=1.0, distinct_footprints=2.5)
+    m = evaluate(localize(geomap, rec, by_frames), rec.truth)
+    assert np.isfinite(m["time_to_fix_s"])
+    assert m["misleading"] == 0.0

@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.8</h1>
+<h1 align="center">Pharos 0.9</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
@@ -104,9 +104,12 @@ pharos bench -j 4 -o runs/bench
 pharos serve --open
 ```
 
-Next on my list: a real flight over Irish pasture or bog, a faster first
-fix at low altitude, learned features as an optional matcher, and lens
-distortion correction.
+Next on my list: a real flight over Irish pasture or bog, learned features
+as an optional matcher, and lens distortion correction. A faster first fix
+for low flights is in as an opt-in: in simulation it gets a position in
+about 6 s instead of 10, and at 40 m over pasture where it used to find
+none, but I want it to hold on real flights before it becomes the default
+([details](docs/results.md#confirming-by-frame-lengths-pharos-09-off-by-default)).
 
 ## License
 

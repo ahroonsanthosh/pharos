@@ -392,6 +392,65 @@ to about 6 m).
   live misleading); correcting heights from the start's speed when the takeoff
   is known (see the Vienna forest above).
 
+### Confirming by frame lengths (Pharos 0.9, off by default)
+
+Tracing pasture at 40 m showed two more walls in front of a true candidate
+that the wide search had already found. It matched 22 of 24 frames within
+1 to 3 m, then died 6 m short of the 120 m a candidate must fly to be
+confirmed. And from 40 m one frame of hedged pasture almost never stands out
+from the whole map, so even past 120 m it could not pass the map-wide
+distinctiveness test.
+
+120 m was set at 110 m, where it is about one frame length of fresh ground.
+At 40 m it is three. Two options count ground in frame lengths along the
+flight, at the height each candidate sees:
+
+* `confirm_footprints: 1.0` confirms after one frame length of matched
+  flight, or 120 m, whichever comes first.
+* `distinct_footprints: 2.5` waives the map-wide distinctiveness test for
+  a candidate matched across 2.5 frame lengths: a run of matches over fresh
+  ground, moving as odometry says, singles a place out where one frame
+  cannot.
+
+In simulation, with `evict_stale` as well, nothing was trusted wrongly in
+any scenario and every reported uncertainty held. Over the 31 benchmark
+scenarios mean coverage rose from 75% to 81% and the first fix typically
+came in 6 s instead of 9 to 12. The far spoofed start went from 59% to 91%,
+and the low winter sun at 50 m, which never confirmed before, reached 24%.
+The one cost was dusk haze, whose 95th-percentile error grew from 5.4 to
+13.1 m, still within its sigmas. On flights flown 40 and 60 m up over four
+backdrops:
+
+| scenario | before: cover, fix s | after: cover, fix s |
+|---|---:|---:|
+| pasture, 40 m | 0%, never | 60%, 29.0 |
+| pasture, 60 m | 82%, 21.0 | 92%, 9.0 |
+| bog and coast, 40 m | 60%, 42.0 | 65%, 36.0 |
+| farmland grid, 40 m | 11%, 49.0 | 27%, 39.5 |
+| nominal, 40 m | 58%, 15.5 | 77%, 4.5 |
+| nominal, 60 m | 76%, 10.0 | 87%, 3.5 |
+
+Without `evict_stale` most of this holds (pasture at 40 m 54%, nominal and
+bog unchanged); eviction mainly adds the farmland grid.
+
+They stay off because the real-flight check was not clean. PinPoint flight 2
+was fetched afresh (video and log from Zenodo, PNOA over WMS at 0.5 m) and
+this setup did not reproduce the published baseline: with the defaults it
+covered 28% of the whole flight, trusting 1.6% of frames wrongly, against
+91% and none above. Flight 1's mount calibration was off for this footage
+(`pharos probe` measured 0.4° back and 1.8° right on flight 2 itself, used
+for both runs below, so the comparison is in-sample). On the same setup the
+two options, without `evict_stale`, raised whole-flight coverage from 28%
+to 54% with no frame trusted wrongly (from 1.6%), and live coverage from
+18% to 28%, but live they trusted 2 frames of 1,961 wrongly (0.1%, within
+three sigmas) where the defaults trusted none. Until the published setup is
+reproduced and the options hold on both PinPoint flights, they are opt-in:
+
+```yaml
+confirm_footprints: 1.0
+distinct_footprints: 2.5
+```
+
 ## Open problems, in detail
 
 * **Acquisition speed.** A whole-map search normalizes the frame-shaped
@@ -416,7 +475,8 @@ to about 6 m).
   it averaged 77% against 81% over four runs of flight 2 (one sample up 12
   points, the other down 16), was neutral on flight 1 and BAMBI, and still
   confirmed nothing on BAMBI from a cold start. `refound_distinct: 3`
-  changed no simulated flight at all.
+  changed no simulated flight at all. Confirming by frame lengths (above)
+  goes further in simulation and is the current candidate for a default.
 * **An Irish flight.** The Irish scenarios are simulated. The test that
   counts is a real flight over Irish pasture or bog against a free map of
   it, which in Ireland means surveying the area once yourself (see

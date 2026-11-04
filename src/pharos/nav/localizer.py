@@ -104,6 +104,14 @@ class LocalizerConfig:
     # Confirmation
     confirm_frames: int = 4
     confirm_distance_m: float = 120.0  # ground covered before a candidate can win
+    # ...or, if set, this many frame lengths of ground along the flight, whichever is less.
+    # 120 m is about one frame length at 110 m; low down it is several, and on a 40 m
+    # flight the true candidate, matched in 22 of 24 frames, died a few metres short.
+    confirm_footprints: float | None = None
+    # A candidate matched across this many frame lengths need not have stood out map-wide
+    # (None: it must). From 40 m one frame of hedged pasture rarely stands out from the
+    # whole map, but a run of matches over fresh ground, moving as odometry says, does.
+    distinct_footprints: float | None = None
     confirm_margin: float = 0.06  # mean-score lead over the runner-up
     # Tracking
     track_min_score: float = 0.18
@@ -170,6 +178,7 @@ class _Hypothesis:
     last_hit_t: float = 0.0
     last_hit_xy: np.ndarray | None = None
     travelled: float = 0.0  # distance between matched positions, not dead reckoning
+    lengths: float = 0.0  # the same in frame lengths along the flight, at each step's height
     distinct: float = 0.0  # best map-wide distinctiveness seen when (re)acquired here
     refound: int = 0  # times a later wide search found it again
     trusted: bool = True  # False after coasting, until re-confirmed by consecutive matches
@@ -520,11 +529,15 @@ class Localizer:
             needed, distance = cfg.confirm_frames, cfg.confirm_distance_m
         if (
             hits < needed
-            or best.travelled < distance
+            or (
+                best.travelled < distance
+                and not (cfg.confirm_footprints and best.lengths >= cfg.confirm_footprints)
+            )
             or best.mean_score < cfg.init_min_score
             or not (
                 best.distinct >= cfg.init_min_distinctiveness
                 or 0 < cfg.refound_distinct <= best.refound
+                or (cfg.distinct_footprints is not None and best.lengths >= cfg.distinct_footprints)
             )
         ):
             return
@@ -638,7 +651,12 @@ class Localizer:
         if h.streak >= cfg.reconfirm_frames and flown >= cfg.reconfirm_distance_m:
             h.trusted = True
         if h.last_hit_xy is not None:
-            h.travelled += float(np.hypot(*(h.xy - h.last_hit_xy)))
+            step = float(np.hypot(*(h.xy - h.last_hit_xy)))
+            h.travelled += step
+            if cfg.confirm_footprints or cfg.distinct_footprints is not None:
+                h.lengths += step / self._frame_length(
+                    frame, h.scale if cfg.candidate_scales else self.scale
+                )
         h.last_hit_t, h.last_hit_xy = frame.t, h.xy
         return fix
 
@@ -897,6 +915,17 @@ class Localizer:
         if not height > 0:  # the belief would put it underground
             return frame
         return replace(frame, telemetry=replace(tel, altitude=height, above_takeoff=False))
+
+    def _frame_length(self, frame: Frame, scale: float) -> float:
+        """Ground covered by ``frame`` along the flight (the image's vertical), metres."""
+        tel = frame.telemetry
+        seen = max(scale * tel.altitude, self.cfg.min_altitude_m)
+        try:
+            fp = footprint(self.camera, seen, tel.pitch, tel.roll)
+        except ValueError:
+            return float("inf")
+        forward = fp.outline[:, 1]
+        return float(forward.max() - forward.min()) if forward.size else float("inf")
 
     def _anywhere(self) -> np.ndarray:
         """Points spread over where the aircraft may be: the prior region, or the map."""
