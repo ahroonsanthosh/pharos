@@ -134,6 +134,20 @@ h2 {
 
 /* -------------------------------------------------- feeds */
 
+.section-head { display: flex; justify-content: space-between; align-items: baseline; }
+.text-btn {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.text-btn:hover { color: var(--ink); }
+
 .feed-list { list-style: none; margin: 0 0 8px; padding: 0; }
 .feed-list li {
   display: flex;
@@ -234,10 +248,31 @@ button.danger:hover { color: var(--danger); }
 }
 .map-empty button { margin-top: 18px; }
 
+.view-switch { display: inline-flex; gap: 18px; margin-bottom: 10px; }
+.view-switch button {
+  padding: 0 0 2px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.view-switch button:hover, .view-switch button.active { color: var(--ink); border-bottom-color: currentColor; }
+
+.camera-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.camera-stage img { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: var(--shadow); }
+.camera-stage img:not([src]) { display: none; }
+.camera-stage p { position: absolute; }
+
 /* -------------------------------------------------- drone view and readout */
 
 .preview {
   position: relative;
+  cursor: pointer;
   aspect-ratio: 4 / 3;
   display: flex;
   align-items: center;

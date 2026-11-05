@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pharos 0.12.1</title>
+  <title>Pharos 0.13</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
   <meta name="color-scheme" content="light dark">
   <link rel="preload" href="/static/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
@@ -11,7 +11,7 @@
 </head>
 <body>
   <header class="corners">
-    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Pharos <span class="version">0.12.1</span></h1>
+    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Pharos <span class="version">0.13</span></h1>
     <nav>
       <button id="new-feed-btn" class="nav-link" type="button">New feed</button>
       <a class="nav-link" href="/api/docs" target="_blank" rel="noopener">API</a>
@@ -21,7 +21,10 @@
   <main>
     <aside id="sidebar">
       <section>
-        <h2>Feeds</h2>
+        <div class="section-head">
+          <h2>Feeds</h2>
+          <button id="clear-feeds" class="text-btn" type="button" hidden>Clear</button>
+        </div>
         <ul id="feed-list" class="feed-list"></ul>
         <p id="no-feeds" class="hint">Nothing running yet.</p>
         <p id="public-note" class="hint" hidden>This is a public demo server: anyone visiting
@@ -34,18 +37,19 @@
 
         <label>Source
           <select name="kind">
+            <option value="push">Drone video sent to this computer (DJI controller, OBS, ground station)</option>
+            <option value="url">Drone video stream address (RTSP, RTMP, HLS, UDP)</option>
+            <option value="browser">Capture card or camera, through this browser</option>
+            <option value="device">Capture card or camera, direct (without Docker)</option>
+            <option value="file">Recorded drone video or photos</option>
             <option value="demo">Demo flight (simulated)</option>
-            <option value="push">Stream pushed to this laptop (DJI, OBS, ground station)</option>
-            <option value="url">Stream URL (RTSP, RTMP, HLS, UDP)</option>
-            <option value="browser">Camera or capture card (through this browser)</option>
-            <option value="device">Camera or capture card (direct, without Docker)</option>
-            <option value="file">Recorded video or photos</option>
           </select>
         </label>
 
         <div data-kind="demo">
-          <label>Scenario <select name="scenario"></select></label>
-          <p class="hint">Renders a simulated flight with its own map. Takes about 15 s to start.</p>
+          <label>Flight <select name="scenario"></select></label>
+          <p class="hint" id="scenario-about"></p>
+          <p class="hint">A simulated flight with its own map, ready in about 15 s.</p>
         </div>
 
         <div data-kind="push">
@@ -130,6 +134,10 @@
     <section id="map-panel">
       <div class="stage">
         <canvas id="map" aria-label="Map with the estimated track"></canvas>
+        <div id="camera-stage" class="camera-stage" hidden>
+          <img id="camera-big" alt="The drone's camera">
+          <p id="camera-big-empty" class="caption-sub">waiting for the first frame</p>
+        </div>
         <div id="map-empty" class="map-empty">
           <p class="caption-name">no feed yet</p>
           <p class="caption-sub">Watch Pharos find a simulated drone from its camera alone.</p>
@@ -137,6 +145,10 @@
         </div>
       </div>
       <div class="caption" id="caption">
+        <div class="view-switch" role="group" aria-label="Main view">
+          <button type="button" data-view="map" class="active">Map</button>
+          <button type="button" data-view="camera">Camera</button>
+        </div>
         <p class="caption-name" id="caption-name"></p>
         <p class="caption-sub" id="caption-sub"></p>
       </div>
@@ -144,7 +156,7 @@
 
     <aside id="details" class="idle">
       <h2>Drone view</h2>
-      <div class="preview"><img id="preview" alt="Latest camera frame"><span id="preview-empty">no frame yet</span></div>
+      <div class="preview" id="preview-box" role="button" tabindex="0" title="Show the camera large"><img id="preview" alt="Latest camera frame"><span id="preview-empty">no frame yet</span></div>
       <div id="status" class="status lost">no feed</div>
       <dl id="readout" class="readout"></dl>
       <p id="exports" class="exports" hidden>Export track:

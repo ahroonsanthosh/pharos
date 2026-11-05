@@ -22,7 +22,7 @@ from pharos.config import from_dict
 from pharos.eval.export import to_csv, to_geojson, to_kml
 from pharos.server.feeds import Feed, FeedSpec
 from pharos.server.store import MapStore, safe_name
-from pharos.sim.scenario import builtin_scenarios
+from pharos.sim.scenario import SCENARIO_DIR, builtin_scenarios
 from pharos.telemetry import ManualTelemetry
 
 STATIC = Path(__file__).parent / "static"
@@ -35,6 +35,44 @@ PUBLIC_MAX_ACTIVE = 2  # feeds running at once
 PUBLIC_MAX_FEEDS = 12  # feeds kept listed; the oldest finished ones go first
 PUBLIC_MAX_FEED_S = 15 * 60  # a feed is stopped after this long
 PUBLIC_MAX_RATE_HZ = 4.0
+
+# Demo flights as the dashboard lists them: the everyday ones first, in this order,
+# then the stress tests that put one thing that goes wrong in a real flight at a time.
+DEMO_FLIGHTS = {
+    "nominal": "Summer farmland",
+    "valley": "Steep valleys, tilted camera",
+    "hills": "Hill survey following the terrain",
+    "ireland_pasture": "Irish pasture on a grey day",
+    "ireland_bog_coast": "Irish bog and coast",
+    "ireland_uplands": "Irish uplands",
+    "winter_snow": "Snow cover",
+    "autumn_low_sun": "Autumn, low sun",
+    "dusk_haze": "Dusk haze",
+    "grid_farmland": "Grid farmland",
+    "land_change": "Years since the map was made",
+    "spring_clouds_on_map": "Clouds on the map",
+    "tilted_camera": "Forward-tilted camera",
+}
+STRESS_TESTS = {
+    "stress_gnss_lost_low": "GPS jammed at 50 m",
+    "stress_spoofed_start": "Spoofed last GPS fix, 60 m off",
+    "stress_spoofed_start_far": "Spoofed last GPS fix, 120 m off",
+    "stress_midflight": "Joined in mid-air",
+    "stress_video": "Frozen video link",
+    "stress_telemetry": "Telemetry dropout",
+    "stress_rain": "Rain on the lens",
+    "stress_hover": "Hovering in place",
+    "stress_descent": "Descending to 45 m",
+    "stress_low_sun_low": "Low winter sun at 50 m",
+    "stress_off_map": "Flying off the map",
+    "stress_map_offset": "Map 10 m off",
+    "stress_tide": "A different tide",
+    "stress_takeoff_hill": "Took off from a hill",
+    "altitude_bias": "Barometer 12% off",
+    "sensor_errors": "Telemetry errors",
+    "no_compass_spinning": "No compass, spinning",
+    "kitchen_sink": "Everything at once",
+}
 
 _EXPORTS = {
     "geojson": (to_geojson, "application/geo+json"),
@@ -125,8 +163,9 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
             raise HTTPException(404, str(exc)) from exc
 
     @app.get("/api/scenarios")
-    def scenarios() -> list[str]:
-        return builtin_scenarios()
+    def scenarios() -> list[dict]:
+        """Built-in demo flights: name, a readable title, its group and what it shows."""
+        return [_demo_info(name) for name in _demo_order()]
 
     @app.post("/api/uploads")
     def upload_files(files: list[UploadFile]) -> dict:
@@ -177,6 +216,24 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
         feeds[feed_id] = Feed(feed_id, spec, store)
         started[feed_id] = time.monotonic()
         return feeds[feed_id].summary()
+
+    @app.delete("/api/feeds")
+    def clear_feeds(running: bool = False) -> dict:
+        """Remove finished feeds; with ``running``, stop and remove the running ones too.
+
+        A public server only clears finished feeds: running ones may be someone else's.
+        """
+        cleared = []
+        for fid, feed in list(feeds.items()):
+            active = feed.state in ("starting", "running")
+            if active and not (running and not public):
+                continue
+            if active:
+                feed.stop()
+            del feeds[fid]
+            started.pop(fid, None)
+            cleared.append(fid)
+        return {"cleared": cleared}
 
     @app.delete("/api/feeds/{feed_id}")
     def delete_feed(feed_id: str) -> dict:
@@ -242,6 +299,30 @@ def _save_upload(upload: UploadFile, folder: Path, limit: int | None = None) -> 
                 raise HTTPException(413, f"files over {limit // 2**20} MB are not accepted here")
             out.write(chunk)
     return path
+
+
+def _demo_order() -> list[str]:
+    known = [*DEMO_FLIGHTS, *STRESS_TESTS]
+    present = set(builtin_scenarios())
+    return [n for n in known if n in present] + sorted(present - set(known))
+
+
+def _demo_info(name: str) -> dict:
+    if name in DEMO_FLIGHTS:
+        title, group = DEMO_FLIGHTS[name], "Demo flights"
+    else:
+        title, group = STRESS_TESTS.get(name, name.replace("_", " ").capitalize()), "Stress tests"
+    return {"name": name, "title": title, "group": group, "about": _about(name)}
+
+
+def _about(name: str) -> str:
+    """The scenario file's opening comment: what the flight shows."""
+    lines = []
+    for line in (SCENARIO_DIR / f"{name}.yaml").read_text().splitlines():
+        if not line.startswith("#"):
+            break
+        lines.append(line.lstrip("# ").strip())
+    return " ".join(lines)
 
 
 def _check_public(spec: FeedSpec, uploads: Path) -> None:

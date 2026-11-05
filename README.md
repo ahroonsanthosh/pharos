@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.12.1</h1>
+<h1 align="center">Pharos 0.13</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -144,7 +144,9 @@ live in about 15 s. After that, use **New feed** for your own footage: a DJI
 controller or OBS over RTMP/SRT, RTSP/HLS/UDP streams, a capture card or
 webcam, or recorded video with its DJI `.SRT` file. If the drone reports
 GPS, I draw it next to the estimate so you can judge the accuracy for
-yourself. Setup for each source, ports and firewall notes are in
+yourself. **Map / Camera** under the main view switches it to the drone's
+own video (or click the small drone view), and **Clear** empties the feeds
+list. Setup for each source, ports and firewall notes are in
 [docs/laptop.md](docs/laptop.md).
 
 ![Adding a feed](docs/img/feed.jpg)

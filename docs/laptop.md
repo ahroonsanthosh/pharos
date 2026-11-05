@@ -51,11 +51,11 @@ pharos serve --open            # add --host 0.0.0.0 to accept other devices
 To receive pushed streams, also download and run
 [MediaMTX](https://github.com/bluenviron/mediamtx/releases); its defaults use
 the ports above. Without Docker, cameras and capture cards plugged into the
-laptop can also be opened directly ("Camera or capture card (direct)").
+laptop can also be opened directly ("Capture card or camera, direct").
 
 ## First run: the demo
 
-Click **New feed**, keep **Demo flight**, press **Start**. A simulated flight
+Click **Start the demo flight** in the middle of the page. A simulated flight
 and its map are generated (about 15 s). The dashboard then shows the drone's
 view, the estimated track (orange while converging, blue once confirmed) and
 the simulated GPS track in green for comparison.
@@ -82,7 +82,7 @@ Everything below goes through **New feed**. For every live source, set:
 
 1. Put the laptop and the remote controller on the same Wi-Fi (or connect
    the laptop to the controller's hotspot) and find the laptop's IP address.
-2. In Pharos: **Stream pushed to this laptop**, stream name `drone`. The form
+2. In Pharos: **Drone video sent to this computer**, stream name `drone`. The form
    lists the URL to use.
 3. In DJI Fly or DJI Pilot 2, open live streaming, choose **RTMP**, and enter
    `rtmp://<laptop-ip>:1935/drone`. Not every model and app version offers
@@ -111,7 +111,7 @@ drawn in green and gives you the accuracy of every flight.
   height above home corrected for terrain (the home position comes over
   MAVLink), plus gimbal pitch for camera tilt. Pick **Fixed** mount if the
   camera is bolted to the frame instead of a gimbal.
-* **Video:** a companion computer's RTSP/UDP stream as **Stream URL**, or
+* **Video:** a companion computer's RTSP/UDP stream as **Drone video stream address**, or
   push RTMP/SRT to the laptop as above.
 * **Video delay:** the video arrives later than the telemetry, typically 0.5
   to 1.5 s through a streaming pipeline. Set it once on a flight that has
@@ -123,7 +123,7 @@ drawn in green and gives you the accuracy of every flight.
 
 ### Archived footage and photo sets
 
-Choose **Recorded video or photos** and select either one video or many
+Choose **Recorded drone video or photos** and select either one video or many
 photos. Photos bring their own GPS, time and, for DJI and senseFly, height
 and heading. Recorded footage runs as fast as the laptop allows, not in real
 time. From a terminal the same thing is `pharos analyze` (see the README).
@@ -133,7 +133,7 @@ Every feed, live or recorded, can be downloaded as **GeoJSON**, **KML**
 
 ### HDMI capture card or webcam
 
-Choose **Camera or capture card (through this browser)**. The browser
+Choose **Capture card or camera, through this browser**. The browser
 captures the device and sends frames to Pharos, so this works under Docker on
 every OS. A cheap USB HDMI capture dongle on the remote controller's HDMI
 output turns any drone with video out into a Pharos feed.

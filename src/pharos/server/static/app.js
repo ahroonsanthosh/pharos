@@ -9,6 +9,8 @@ const state = {
   map: null, // { info, img }
   view: { zoom: 1, cx: 0, cy: 0 }, // map-preview pixel at the canvas centre
   camera: null, // { feedId, stream, ws, timer }
+  scenarios: [], // { name, title, group, about }
+  mode: "map", // what the big centre view shows: "map" or "camera"
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -58,6 +60,7 @@ async function refreshFeeds() {
     return li;
   }));
   $("#no-feeds").hidden = state.feeds.length > 0;
+  $("#clear-feeds").hidden = state.feeds.length === 0;
   const any = state.feeds.length > 0;
   $("#map-empty .caption-name").textContent = any ? "pick a feed" : "no feed yet";
   $("#map-empty .caption-sub").textContent = any
@@ -74,6 +77,7 @@ function selectFeed(id) {
   $("#exports").hidden = !id;
   for (const a of document.querySelectorAll("#exports a")) a.href = id ? `/api/feeds/${id}/export.${a.dataset.fmt}` : "";
   $("#preview").removeAttribute("src");
+  $("#camera-big").removeAttribute("src");
   refreshFeeds();
   pollRecords();
 }
@@ -90,7 +94,12 @@ async function pollRecords() {
   if (id !== state.selected) return;
   state.records.push(...data.records);
   if (data.map && state.map?.info.name !== data.map) await loadMap(data.map);
-  if (data.records.length) $("#preview").src = `/api/feeds/${id}/preview.jpg?n=${state.records.length}`;
+  if (data.records.length) {
+    const src = `/api/feeds/${id}/preview.jpg?n=${state.records.length}`;
+    $("#preview").src = src;
+    if (state.mode === "camera") $("#camera-big").src = src;
+  }
+  $("#camera-big-empty").hidden = state.records.length > 0;
   renderDetails(data);
   draw();
 }
@@ -190,6 +199,37 @@ $("#delete-feed").onclick = async () => {
   if (state.camera?.feedId === id) stopCamera();
   await api(`/api/feeds/${id}`, { method: "DELETE" });
   selectFeed(null);
+};
+
+$("#clear-feeds").onclick = async () => {
+  const running = state.feeds.filter((f) => f.state === "starting" || f.state === "running");
+  let stop = false;
+  if (running.length && !state.public) {
+    const n = running.length;
+    stop = confirm(`Stop ${n} running feed${n > 1 ? "s" : ""} as well? Cancel clears only the finished ones.`);
+  }
+  if (stop && state.camera) stopCamera();
+  await api(`/api/feeds${stop ? "?running=true" : ""}`, { method: "DELETE" });
+  await refreshFeeds();
+  if (state.selected && !state.feeds.some((f) => f.id === state.selected)) selectFeed(null);
+};
+
+function setView(mode) {
+  state.mode = mode;
+  for (const b of document.querySelectorAll(".view-switch button")) b.classList.toggle("active", b.dataset.view === mode);
+  $("#camera-stage").hidden = mode !== "camera";
+  canvas.style.visibility = mode === "map" ? "" : "hidden";
+  $("#preview-box").title = mode === "map" ? "Show the camera large" : "Show the map";
+  if (mode === "camera" && $("#preview").src) $("#camera-big").src = $("#preview").src;
+  draw();
+}
+for (const b of document.querySelectorAll(".view-switch button")) b.onclick = () => setView(b.dataset.view);
+$("#preview-box").onclick = () => setView(state.mode === "map" ? "camera" : "map");
+$("#preview-box").onkeydown = (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    $("#preview-box").click();
+  }
 };
 
 // ---------------------------------------------------------------- map canvas
@@ -305,8 +345,20 @@ function showFormSections() {
 
 async function fillFormOptions() {
   const [scenarios, maps] = await Promise.all([api("/api/scenarios"), api("/api/maps")]);
-  form.scenario.replaceChildren(...scenarios.map((s) => new Option(s.replaceAll("_", " "), s, s === "nominal", s === "nominal")));
+  state.scenarios = scenarios;
+  const groups = new Map();
+  for (const s of scenarios) {
+    if (!groups.has(s.group)) groups.set(s.group, Object.assign(document.createElement("optgroup"), { label: s.group }));
+    groups.get(s.group).append(new Option(s.title, s.name, s.name === "nominal", s.name === "nominal"));
+  }
+  form.scenario.replaceChildren(...groups.values());
+  showScenarioAbout();
   form.map.replaceChildren(...maps.map((m) => new Option(`${m.name} (${m.size_km[0]} × ${m.size_km[1]} km)`, m.name)));
+}
+
+function showScenarioAbout() {
+  const s = state.scenarios.find((x) => x.name === form.scenario.value);
+  $("#scenario-about").textContent = s?.about ?? "";
 }
 
 async function showPushUrls() {
@@ -364,7 +416,10 @@ function showError(message) {
 async function buildSpec() {
   const f = form;
   const kind = f.kind.value;
-  if (kind === "demo") return { source: `demo:${f.scenario.value}`, name: f.name.value || `demo: ${f.scenario.value}` };
+  if (kind === "demo") {
+    const title = state.scenarios.find((s) => s.name === f.scenario.value)?.title ?? f.scenario.value;
+    return { source: `demo:${f.scenario.value}`, name: f.name.value || title };
+  }
   const spec = {
     name: f.name.value,
     map: f.map.value,
@@ -433,6 +488,7 @@ $("#demo-btn").onclick = async (e) => {
   }
 };
 form.kind.onchange = showFormSections;
+form.scenario.onchange = showScenarioAbout;
 form.telemetry.onchange = showFormSections;
 form.push_path.oninput = showPushUrls;
 
@@ -481,6 +537,7 @@ async function applyServerMode() {
     for (const opt of [...form[name].options]) if (!keep.includes(opt.value)) opt.remove();
   }
   $("#public-note").hidden = false;
+  state.public = true;
 }
 
 // ---------------------------------------------------------------- start

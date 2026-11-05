@@ -87,7 +87,9 @@ def test_http_api(small_sim, tmp_path):
         maps = client.get("/api/maps").json()
         assert maps[0]["name"] == "area" and maps[0]["gsd"] == 1.0
         assert client.get("/api/maps/area/preview.jpg").headers["content-type"] == "image/jpeg"
-        assert "nominal" in client.get("/api/scenarios").json()
+        demos = {d["name"]: d for d in client.get("/api/scenarios").json()}
+        assert demos["nominal"]["group"] == "Demo flights" and demos["nominal"]["about"]
+        assert demos["kitchen_sink"]["title"] == "Everything at once"
 
         r = client.post("/api/feeds", json={"source": "browser", "map": "area"})
         feed_id = r.json()["id"]
@@ -134,5 +136,21 @@ def test_a_public_server_limits_running_feeds(small_sim, tmp_path):
     for _ in range(2):  # browser feeds wait for frames, so they keep running
         assert client.post("/api/feeds", json=feed).status_code == 200
     assert client.post("/api/feeds", json=feed).status_code == 429
+    for f in app.state.feeds.values():
+        f.stop()
+
+
+@pytest.mark.parametrize("public", [False, True])
+def test_clearing_feeds(small_sim, tmp_path, public):
+    app = create_app(tmp_path, public=public)
+    app.state.store.add("area", small_sim[0])
+    client = TestClient(app)
+    live = client.post("/api/feeds", json={"source": "browser", "map": "area"}).json()["id"]
+    done = client.post("/api/feeds", json={"source": "browser", "map": "missing"}).json()["id"]
+    assert wait_for(app.state.feeds[done]) == "error"
+    assert client.delete("/api/feeds").json()["cleared"] == [done]  # finished ones only
+    cleared = client.delete("/api/feeds?running=true").json()["cleared"]
+    # a public server never stops a running feed that may be someone else's
+    assert cleared == ([] if public else [live])
     for f in app.state.feeds.values():
         f.stop()

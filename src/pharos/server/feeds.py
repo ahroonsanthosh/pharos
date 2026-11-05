@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 
 LIVE_SCHEMES = ("rtsp", "rtsps", "rtmp", "rtmps", "srt", "udp", "tcp")
 MAX_WIDTH = 960  # frames are downscaled to this width before localization
-PREVIEW_WIDTH = 480
+PREVIEW_WIDTH = 960  # the dashboard can show the camera large
 
 
 @dataclass(frozen=True)
