@@ -111,8 +111,7 @@ async function loadMap(name) {
   img.src = `/api/maps/${encodeURIComponent(name)}/preview.jpg`;
   await img.decode();
   state.map = { info, img };
-  const fit = 0.9 * Math.min(canvas.clientWidth / img.width, canvas.clientHeight / img.height);
-  state.view = { zoom: fit, cx: img.width / 2, cy: img.height / 2 };
+  state.view = { zoom: 1, cx: img.width / 2, cy: img.height / 2, fit: true };
 }
 
 // ---------------------------------------------------------------- details panel
@@ -134,9 +133,10 @@ function renderDetails(feed) {
   }
   let sub = "";
   if (feed.state === "error" || feed.error) {
+    const message = feed.error || feed.state;
     status.className = "status error";
-    status.textContent = feed.error || feed.state;
-    sub = feed.error || feed.state;
+    status.textContent = message.split(". ")[0].replace(/\.$/, ""); // the gist; the advice goes under the map
+    sub = message;
   } else if (feed.state === "starting") {
     status.className = "status lost";
     status.textContent = "starting";
@@ -250,6 +250,8 @@ function draw() {
   $("#map-empty").hidden = !!state.map || !!state.selected;
   if (!state.map) return;
   const { img, info } = state.map;
+  // Until the user zooms, the whole map fits the stage, whatever size the stage has become.
+  if (state.view.fit) state.view.zoom = 0.9 * Math.min(canvas.clientWidth / img.width, canvas.clientHeight / img.height);
   const located = state.records.filter((r) => r.x !== undefined);
   const last = located.at(-1);
   if ($("#follow").checked && last) [state.view.cx, state.view.cy] = toPreview(last.x, last.y);
@@ -327,6 +329,7 @@ canvas.addEventListener("pointerup", () => (drag = null));
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   state.view.zoom *= Math.exp(-e.deltaY * 0.0015);
+  state.view.fit = false;
   draw();
 }, { passive: false });
 window.addEventListener("resize", draw);

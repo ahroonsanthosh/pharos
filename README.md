@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.13</h1>
+<h1 align="center">Pharos 0.14</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -146,8 +146,9 @@ webcam, or recorded video with its DJI `.SRT` file. If the drone reports
 GPS, I draw it next to the estimate so you can judge the accuracy for
 yourself. **Map / Camera** under the main view switches it to the drone's
 own video (or click the small drone view), and **Clear** empties the feeds
-list. Setup for each source, ports and firewall notes are in
-[docs/laptop.md](docs/laptop.md).
+list. To fly a DJI drone with it, follow
+[Connecting a DJI drone](docs/laptop.md#dji-live); setup for every other
+source, ports and firewall notes are in [docs/laptop.md](docs/laptop.md).
 
 ![Adding a feed](docs/img/feed.jpg)
 

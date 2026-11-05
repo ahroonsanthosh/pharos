@@ -108,8 +108,10 @@ def test_http_api(small_sim, tmp_path):
         assert client.get("/api/feeds").json() == []
 
 
-def test_a_public_server_runs_demos_and_uploads_only(tmp_path):
-    client = TestClient(create_app(tmp_path, public=True))
+def test_a_public_server_runs_demos_and_uploads_only(small_sim, tmp_path):
+    app = create_app(tmp_path, public=True)
+    app.state.store.add("area", small_sim[0])
+    client = TestClient(app)
     info = client.get("/api/info").json()
     assert info["public"] and "data_dir" not in info
     refused = [
@@ -123,9 +125,11 @@ def test_a_public_server_runs_demos_and_uploads_only(tmp_path):
     for body in refused:
         assert client.post("/api/feeds", json=body).status_code == 403, body
     path = client.post("/api/uploads", files={"files": ("clip.mp4", b"not a video")}).json()["path"]
-    assert client.post("/api/feeds", json={"source": path, "map": "x"}).status_code == 200
-    too_fast = {"source": "browser", "map": "x", "rate_hz": 30}
+    assert client.post("/api/feeds", json={"source": path, "map": "area"}).status_code == 200
+    too_fast = {"source": "browser", "map": "area", "rate_hz": 30}
     assert client.post("/api/feeds", json=too_fast).status_code == 422
+    for f in app.state.feeds.values():
+        f.stop()
 
 
 def test_a_public_server_limits_running_feeds(small_sim, tmp_path):
@@ -146,7 +150,8 @@ def test_clearing_feeds(small_sim, tmp_path, public):
     app.state.store.add("area", small_sim[0])
     client = TestClient(app)
     live = client.post("/api/feeds", json={"source": "browser", "map": "area"}).json()["id"]
-    done = client.post("/api/feeds", json={"source": "browser", "map": "missing"}).json()["id"]
+    path = client.post("/api/uploads", files={"files": ("clip.mp4", b"not a video")}).json()["path"]
+    done = client.post("/api/feeds", json={"source": path, "map": "area"}).json()["id"]
     assert wait_for(app.state.feeds[done]) == "error"
     assert client.delete("/api/feeds").json()["cleared"] == [done]  # finished ones only
     cleared = client.delete("/api/feeds?running=true").json()["cleared"]
@@ -154,3 +159,41 @@ def test_clearing_feeds(small_sim, tmp_path, public):
     assert cleared == ([] if public else [live])
     for f in app.state.feeds.values():
         f.stop()
+
+
+def test_a_feed_that_cannot_run_is_refused_in_plain_words(small_sim, tmp_path):
+    app = create_app(tmp_path)
+    app.state.store.add("area", small_sim[0])
+    client = TestClient(app)
+    refused = {
+        "choose a map": {"source": "browser"},
+        "no map called": {"source": "browser", "map": "nope"},
+        "cannot find the video": {"source": str(tmp_path / "none.mp4"), "map": "area"},
+        "rate must be": {"source": "browser", "map": "area", "rate_hz": 0},
+        "must be a number": {"source": "browser", "map": "area", "rate_hz": "fast"},
+        "height above ground": {"source": "browser", "map": "area", "altitude_m": -50},
+        "field of view": {"source": "browser", "map": "area", "hfov_deg": 0},
+        "subtitle file": {"source": "browser", "map": "area", "telemetry": "srt:/no.srt"},
+        "unknown telemetry": {"source": "browser", "map": "area", "telemetry": "pigeon"},
+        "no demo flight": {"source": "demo:nope"},
+    }
+    for words, body in refused.items():
+        r = client.post("/api/feeds", json=body)
+        assert r.status_code == 422 and words in r.json()["detail"], (body, r.text)
+    live = client.post("/api/feeds", json={"source": "browser", "map": "area"}).json()["id"]
+    for bad in ({"altitude_m": "high"}, {"altitude_m": 0}, {"tilt_deg": 120}):
+        assert client.patch(f"/api/feeds/{live}/telemetry", json=bad).status_code == 422
+    assert client.patch(f"/api/feeds/{live}/telemetry", json={"altitude_m": 90}).status_code == 200
+    app.state.feeds[live].stop()
+
+
+def test_a_live_feed_without_video_says_what_to_check(small_sim, tmp_path, monkeypatch):
+    monkeypatch.setattr("pharos.server.feeds.NO_VIDEO_S", 0.5)
+    store = MapStore(tmp_path / "maps")
+    store.add("area", small_sim[0])
+    feed = Feed("feed-1", FeedSpec(source="push:drone", map="area"), store)
+    deadline = time.monotonic() + 20
+    while not feed.error and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert feed.state == "running" and "MediaMTX" in (feed.error or "")
+    feed.stop()

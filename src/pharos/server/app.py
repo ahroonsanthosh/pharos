@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pharos import __version__
 from pharos.config import from_dict
 from pharos.eval.export import to_csv, to_geojson, to_kml
-from pharos.server.feeds import Feed, FeedSpec
+from pharos.server.feeds import Feed, FeedSpec, check_spec
 from pharos.server.store import MapStore, safe_name
 from pharos.sim.scenario import SCENARIO_DIR, builtin_scenarios
 from pharos.telemetry import ManualTelemetry
@@ -152,7 +152,8 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
             try:
                 stored = store.add_file(name, main)
             except (ValueError, OSError, KeyError) as exc:
-                raise HTTPException(422, str(exc)) from exc
+                reason = str(exc).replace(f"{tmp}/", "").replace(f"{tmp}\\", "")
+                raise HTTPException(422, f"could not read {main.name} as a map: {reason}") from exc
         return store.info(stored)
 
     @app.get("/api/maps/{name}/preview.jpg")
@@ -160,7 +161,7 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
         try:
             return Response(store.preview(name), media_type="image/jpeg")
         except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
+            raise HTTPException(404, exc.args[0]) from exc
 
     @app.get("/api/scenarios")
     def scenarios() -> list[dict]:
@@ -205,11 +206,13 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
     def create_feed(body: dict) -> dict:
         try:
             spec = from_dict(FeedSpec, body)
+            if public:
+                _check_public(spec, uploads)  # what is not allowed here at all comes first
+            check_spec(spec, store.names(), builtin_scenarios())
         except (TypeError, ValueError) as exc:
             raise HTTPException(422, str(exc)) from exc
         if public:
             tidy()
-            _check_public(spec, uploads)
             if sum(f.state in ("starting", "running") for f in feeds.values()) >= PUBLIC_MAX_ACTIVE:
                 raise HTTPException(429, "this public server is busy; stop a feed or try later")
         feed_id = f"feed-{next(ids)}"
@@ -261,10 +264,17 @@ def create_app(data_dir: str | Path, public: bool | None = None) -> FastAPI:
         feed = get_feed(feed_id)
         if not isinstance(feed.telemetry, ManualTelemetry):
             raise HTTPException(409, "feed does not use manual telemetry")
-        if "altitude_m" in body:
-            feed.telemetry.update(altitude=float(body["altitude_m"]))
-        if "tilt_deg" in body:
-            feed.telemetry.update(pitch=math.radians(float(body["tilt_deg"])))
+        try:
+            now = feed.telemetry.telemetry
+            altitude = float(body.get("altitude_m", now.altitude))
+            tilt = float(body.get("tilt_deg", math.degrees(now.pitch)))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "height and tilt must be numbers") from exc
+        if not (math.isfinite(altitude) and altitude > 0):
+            raise HTTPException(422, "height above ground must be more than 0 m")
+        if not -90 <= tilt <= 90:
+            raise HTTPException(422, "camera tilt must be between -90 and 90 degrees")
+        feed.telemetry.update(altitude=altitude, pitch=math.radians(tilt))
         return {"ok": True}
 
     @app.websocket("/api/feeds/{feed_id}/frames")

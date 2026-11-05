@@ -1,3 +1,3 @@
 """Pharos: absolute visual localization of drone video against satellite imagery."""
 
-__version__ = "0.13"
+__version__ = "0.14"

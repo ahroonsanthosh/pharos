@@ -80,17 +80,45 @@ Everything below goes through **New feed**. For every live source, set:
 
 ### DJI, live
 
-1. Put the laptop and the remote controller on the same Wi-Fi (or connect
-   the laptop to the controller's hotspot) and find the laptop's IP address.
-2. In Pharos: **Drone video sent to this computer**, stream name `drone`. The form
-   lists the URL to use.
-3. In DJI Fly or DJI Pilot 2, open live streaming, choose **RTMP**, and enter
-   `rtmp://<laptop-ip>:1935/drone`. Not every model and app version offers
-   RTMP live streaming. If yours doesn't, use an HDMI capture card (below) or
-   a recorded video.
-4. The RTMP stream carries no telemetry, so choose **Manual** telemetry and
-   enter the height above ground. Update it from the dashboard if you climb
-   or descend.
+The DJI app streams the drone's video over RTMP to a small free relay,
+MediaMTX, and Pharos reads it from there.
+
+1. **Run the relay.** With Docker, it already runs. Without Docker, download
+   the `windows_amd64.zip` (or your system's file) from the
+   [MediaMTX releases](https://github.com/bluenviron/mediamtx/releases),
+   unzip it and run `mediamtx.exe`. Keep its window open while you fly. If
+   Windows asks, allow it on **private** networks.
+2. **Put the phone (or DJI RC) and the laptop on the same Wi-Fi**, or turn
+   on the laptop's mobile hotspot and join it from the phone.
+3. **Find the laptop's address.** On Windows, run `ipconfig` and take the
+   **IPv4 Address** of the Wi-Fi adapter (something like `192.168.1.23`).
+4. **Start the feed in Pharos.** **New feed**, keep **Drone video sent to
+   this computer** and stream name `drone`, choose your area's map, set
+   **Telemetry: Manual** with the height you will fly at, and press
+   **Start**. It waits for video and tells you what to check if none comes.
+5. **Start streaming in the DJI app.** In DJI Fly, from the camera view:
+   **... (settings) → Transmission → Live Streaming Platforms → RTMP**. In
+   DJI Pilot 2, open the live stream settings and choose **RTMP**. Enter
+   `rtmp://<laptop address>:1935/drone`, for example
+   `rtmp://192.168.1.23:1935/drone`. Menu names vary between app versions,
+   and not every model offers RTMP; if yours doesn't, use an HDMI capture
+   card (below) or a recorded video.
+6. **Fly with the camera pointing straight down** (gimbal at -90°), 80 m or
+   more above the ground for the best results, and keep the height in
+   Pharos up to date: change it from the dashboard when you climb or
+   descend. The RTMP stream carries no telemetry, so this is the only height
+   Pharos gets.
+
+**Field of view.** DJI publishes a diagonal field of view, and the live
+stream is 16:9. An 82° diagonal (most current DJI drones) is **74°**
+horizontal in Pharos, and 84° is 76°; for other cameras use the formula
+above with w:h = 16:9.
+
+**Getting the best accuracy.** Turn on **Video Subtitles** in the DJI camera
+settings as well. Then every recording comes with a `.SRT` file holding the
+drone's height, gimbal angle and GPS for each frame. Analyzing that
+recording afterwards (next section) gives Pharos the exact height all the
+way and scores it against the drone's own GPS.
 
 ### DJI, recorded
 

@@ -52,6 +52,7 @@ log = logging.getLogger(__name__)
 LIVE_SCHEMES = ("rtsp", "rtsps", "rtmp", "rtmps", "srt", "udp", "tcp")
 MAX_WIDTH = 960  # frames are downscaled to this width before localization
 PREVIEW_WIDTH = 960  # the dashboard can show the camera large
+NO_VIDEO_S = 10.0  # a live feed this long without a frame says what to check
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,76 @@ class FeedSpec:
     # Begin from the aircraft's first GNSS fix (then never use GNSS again, so jamming or
     # spoofing later cannot pull the track away); off: a cold start, GNSS only shown.
     start_from_gnss: bool = False
+
+
+def check_spec(spec: FeedSpec, maps: list[str], scenarios: list[str]) -> None:
+    """Raise ValueError, in plain words, for a feed that could not run as asked."""
+    for name in ("hfov_deg", "rate_hz", "altitude_m", "tilt_deg", "video_delay_s"):
+        value = getattr(spec, name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"{name} must be a number, not {value!r}")
+    for name in ("source", "map", "name", "telemetry", "mount"):
+        if not isinstance(getattr(spec, name), str):
+            raise ValueError(f"{name} must be text")
+    if not isinstance(spec.start_from_gnss, bool):
+        raise ValueError("start_from_gnss must be true or false")
+    if not spec.source.strip():
+        raise ValueError("choose a video source")
+    if spec.source.startswith("demo:"):
+        demo = spec.source.removeprefix("demo:")
+        if demo not in scenarios and not Path(demo).is_file():
+            raise ValueError(f"there is no demo flight called {demo!r}")
+        return  # a demo brings its own map, camera and telemetry
+    if not spec.map:
+        raise ValueError("choose a map, or upload one for the area you are flying")
+    if spec.map not in maps:
+        raise ValueError(f"there is no map called {spec.map!r}; upload it first")
+    if not 0 < spec.rate_hz <= 30:
+        raise ValueError("rate must be above 0 and at most 30 frames a second")
+    if not 1 <= spec.hfov_deg <= 179:
+        raise ValueError("horizontal field of view must be between 1 and 179 degrees")
+    if not -90 <= spec.tilt_deg <= 90:
+        raise ValueError("camera tilt must be between -90 and 90 degrees")
+    if spec.video_delay_s < 0:
+        raise ValueError("video delay cannot be negative")
+    if spec.mount not in ("gimbal", "fixed"):
+        raise ValueError("camera mount is gimbal or fixed")
+    kind, _, arg = spec.telemetry.partition(":")
+    if kind == "manual" and spec.altitude_m <= 0:
+        raise ValueError("height above ground must be more than 0 m")
+    if kind == "srt" and not Path(arg).is_file():
+        raise ValueError(f"cannot find the subtitle file {arg!r}")
+    if kind not in ("manual", "mavlink", "srt"):
+        raise ValueError(f"unknown telemetry {spec.telemetry!r}; use manual, mavlink or srt")
+    live = (
+        spec.source in ("browser",)
+        or spec.source.startswith("push:")
+        or spec.source.isdigit()
+        or "://" in spec.source
+    )
+    if not live and not Path(spec.source).exists():
+        raise ValueError(f"cannot find the video or photos at {spec.source!r}")
+
+
+def no_video_hint(source: str) -> str:
+    """What to check when a live source has sent nothing."""
+    if source.startswith("push:"):
+        path = source.removeprefix("push:")
+        return (
+            f"No video yet. Check the drone or app is streaming to rtmp://<this computer>:1935/"
+            f"{path}, and that MediaMTX is running (Docker starts it for you)."
+        )
+    if source == "browser":
+        return "No video yet from the browser camera. Allow camera access, or pick another camera."
+    if source.isdigit():
+        return (
+            f"No video yet from camera {source}. Check it is plugged in and not in use elsewhere."
+        )
+    return f"No video yet from {source}. Check the address, and that the stream is on."
 
 
 class FrameSource(Protocol):
@@ -154,7 +225,7 @@ class Feed:
         localizer: Localizer | None = None
         check, started, last_fix = GnssCheck(), False, None
         period = 1.0 / self.spec.rate_hz
-        next_due = time.monotonic()
+        next_due = last_frame = time.monotonic()
         while not self._stop.is_set():
             if source.live:
                 time.sleep(max(0.0, next_due - time.monotonic()))
@@ -163,7 +234,11 @@ class Feed:
             except EOFError:
                 return
             if item is None:
+                if source.live and time.monotonic() - last_frame > NO_VIDEO_S:
+                    self.error = no_video_hint(self.spec.source)
                 continue
+            last_frame = time.monotonic()
+            self.error = None
             next_due = time.monotonic() + period
             t, image = item
             sample = self.telemetry.at(t - self.spec.video_delay_s if source.live else t)
