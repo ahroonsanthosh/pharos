@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pharos 0.14</title>
+  <title>Pharos 0.15</title>
   <link rel="icon" type="image/png" href="/static/logo.png">
   <meta name="color-scheme" content="light dark">
   <link rel="preload" href="/static/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
@@ -11,7 +11,7 @@
 </head>
 <body>
   <header class="corners">
-    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Pharos <span class="version">0.14</span></h1>
+    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Pharos <span class="version">0.15</span></h1>
     <nav>
       <button id="new-feed-btn" class="nav-link" type="button">New feed</button>
       <a class="nav-link" href="/api/docs" target="_blank" rel="noopener">API</a>
@@ -96,6 +96,9 @@
             <label>Horizontal FOV (°) <input name="hfov_deg" type="number" step="0.1" value="70"></label>
             <label>Rate (Hz) <input name="rate_hz" type="number" step="0.5" min="0.5" value="2"></label>
           </div>
+          <label>Lens distortion, optional
+            <input name="lens" placeholder="k1, k2, ... as pharos lens prints them" autocomplete="off">
+          </label>
 
           <label>Telemetry
             <select name="telemetry">

@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.14</h1>
+<h1 align="center">Pharos 0.15</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -31,8 +31,8 @@ On public real flights (GPS used only to score it):
 | Farmland survey, fixed-wing, 13 min     |                 92% |             63% |              none |
 | River valley survey, fixed-wing, 15 min |                 91% |             52% |              none |
 
-Across 31 simulated scenarios (snow, haze, low sun, Irish bog and uplands,
-a frozen video link, GPS jammed at 50 m, a spoofed starting fix and more)
+Across 32 simulated scenarios (snow, haze, low sun, Irish bog and uplands,
+a wide-angle lens, a frozen video link, GPS jammed at 50 m, a spoofed starting fix and more)
 it never trusts a wrong position. You can check that yourself with
 `pharos bench`. The full numbers, the DJI footage I tested on and the ideas
 I tried and threw away are in [docs/results.md](docs/results.md).
@@ -173,6 +173,12 @@ summary that scores Pharos against the footage's own GPS if it has any.
 `pharos --help` covers syncing a camera to an autopilot log, calibrating a
 camera and starting from a known position.
 
+**Wide or distorting lenses** (action and FPV cameras, uncorrected video):
+film a printed checkerboard from a few angles with the same camera and
+settings, and run `pharos lens board.mp4 --board 9x6`. It prints the
+`--hfov` and `--lens` values to add to the commands above, and the same
+numbers for the dashboard's **Lens distortion** field.
+
 ## Put it online
 
 You don't need to, but if you want others to try it in a browser, a free
@@ -207,8 +213,8 @@ pharos bench -j 4 -o runs/bench
 pharos serve --open
 ```
 
-Next on my list: a real flight over Irish pasture or bog, learned features
-as an optional matcher, and lens distortion correction. A faster first fix
+Next on my list: a real flight over Irish pasture or bog, and learned
+features as an optional matcher. A faster first fix
 for low flights is in as an opt-in: in simulation it gets a position in
 about 6 s instead of 10, and at 40 m over pasture where it used to find
 none, but I want it to hold on real flights before it becomes the default

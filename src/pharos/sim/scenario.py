@@ -18,6 +18,9 @@ class CameraSpec:
     width: int = 640
     height: int = 480
     hfov_deg: float = 70.0
+    # Lens distortion, OpenCV's (k1, k2, p1, p2, k3) or fewer; the localizer is told
+    # it unless the run says otherwise. Empty: a pinhole camera.
+    distortion: tuple[float, ...] = ()
     blur: float = 0.6  # optics, Gaussian sigma in pixels
     motion_blur_px: float = 2.0  # streak length along the direction of flight
     noise: float = 0.012  # sensor noise (0..1 scale)

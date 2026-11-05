@@ -102,7 +102,12 @@ def misaligned(
 
 @dataclass(frozen=True)
 class Camera:
-    """Pinhole intrinsics. Frames are assumed to be undistorted."""
+    """Pinhole intrinsics, and the lens distortion of the frames if they have any.
+
+    ``dist`` holds OpenCV's coefficients ``(k1, k2, p1, p2, k3)`` (or fewer). The
+    localizer straightens distorted frames first (``pharos.vision.lens``), so
+    everything after it sees a pinhole camera with ``dist`` empty.
+    """
 
     width: int
     height: int
@@ -110,11 +115,14 @@ class Camera:
     fy: float
     cx: float
     cy: float
+    dist: tuple[float, ...] = ()
 
     @classmethod
-    def from_fov(cls, width: int, height: int, hfov_deg: float) -> Camera:
+    def from_fov(
+        cls, width: int, height: int, hfov_deg: float, dist: tuple[float, ...] = ()
+    ) -> Camera:
         f = 0.5 * width / np.tan(np.radians(hfov_deg) / 2)
-        return cls(width, height, f, f, (width - 1) / 2, (height - 1) / 2)
+        return cls(width, height, f, f, (width - 1) / 2, (height - 1) / 2, tuple(dist))
 
     @property
     def K(self) -> np.ndarray:  # noqa: N802 - standard name for the intrinsic matrix
@@ -129,6 +137,7 @@ class Camera:
             self.fy * factor,
             (self.cx + 0.5) * factor - 0.5,
             (self.cy + 0.5) * factor - 0.5,
+            self.dist,  # in normalized coordinates, the same at any size
         )
 
 

@@ -176,15 +176,24 @@ def test_a_feed_that_cannot_run_is_refused_in_plain_words(small_sim, tmp_path):
         "subtitle file": {"source": "browser", "map": "area", "telemetry": "srt:/no.srt"},
         "unknown telemetry": {"source": "browser", "map": "area", "telemetry": "pigeon"},
         "no demo flight": {"source": "demo:nope"},
+        "lens distortion is up to 5": {
+            "source": "browser",
+            "map": "area",
+            "lens": [1, 2, 3, 4, 5, 6],
+        },
+        "not a real lens": {"source": "browser", "map": "area", "lens": [-40]},
     }
     for words, body in refused.items():
         r = client.post("/api/feeds", json=body)
         assert r.status_code == 422 and words in r.json()["detail"], (body, r.text)
+    lensed = {"source": "browser", "map": "area", "lens": [-0.2, 0.05]}
+    assert client.post("/api/feeds", json=lensed).status_code == 200
     live = client.post("/api/feeds", json={"source": "browser", "map": "area"}).json()["id"]
     for bad in ({"altitude_m": "high"}, {"altitude_m": 0}, {"tilt_deg": 120}):
         assert client.patch(f"/api/feeds/{live}/telemetry", json=bad).status_code == 422
     assert client.patch(f"/api/feeds/{live}/telemetry", json={"altitude_m": 90}).status_code == 200
-    app.state.feeds[live].stop()
+    for f in app.state.feeds.values():
+        f.stop()
 
 
 def test_a_live_feed_without_video_says_what_to_check(small_sim, tmp_path, monkeypatch):

@@ -77,6 +77,10 @@ Everything below goes through **New feed**. For every live source, set:
   diagonal of 82° is about 70° horizontal. A wrong FOV looks like a wrong
   altitude and degrades accuracy.
 * **Rate**: 1 to 2 Hz is plenty; higher costs CPU without helping.
+* **Lens distortion** (optional): for a wide or uncorrected lens, the
+  numbers `pharos lens` prints after you film a printed checkerboard with
+  the same camera. Leave it empty for DJI video, which the camera usually
+  corrects already.
 
 ### DJI, live
 

@@ -1,0 +1,6 @@
+# A wide-angle lens with strong barrel distortion, on a camera tilted 25 degrees
+# forward: straight roads and field edges bow outwards, most at the far edge of
+# the view. Pharos is told the lens (k1 -0.3, k2 0.1), as pharos lens measures it.
+name: wide_lens
+base: tilted_camera
+camera: {distortion: [-0.3, 0.1]}

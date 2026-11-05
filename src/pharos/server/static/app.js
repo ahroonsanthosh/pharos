@@ -436,6 +436,13 @@ async function buildSpec() {
     start_from_gnss: f.start_from_gnss.checked,
   };
   if (!spec.map) throw new Error("Upload or choose a map first.");
+  const lens = f.lens.value.trim();
+  if (lens) {
+    spec.lens = lens.split(/[\s,]+/).filter(Boolean).map(Number);
+    if (spec.lens.some((k) => !Number.isFinite(k)) || spec.lens.length > 5) {
+      throw new Error("Lens distortion is up to 5 numbers, like -0.12, 0.05.");
+    }
+  }
   if (spec.telemetry === "mavlink") spec.telemetry = `mavlink:udpin:0.0.0.0:${f.mavlink_port.value}`;
   if (kind === "push") spec.source = `push:${f.push_path.value}`;
   if (kind === "url") spec.source = f.url.value.trim();

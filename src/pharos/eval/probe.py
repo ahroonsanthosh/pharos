@@ -28,6 +28,7 @@ from pharos.footage import Footage
 from pharos.geomap import GeoMap
 from pharos.geometry import rot2
 from pharos.nav.localizer import LocalizerConfig, matchable_view
+from pharos.vision.lens import pinhole
 from pharos.vision.matcher import CorrelationMatcher, SearchRegion, view_height
 
 THRESHOLDS = (1.0, 1.5, 2.0)
@@ -56,7 +57,7 @@ def probe(
     cfg = cfg or ProbeConfig()
     config = config or LocalizerConfig()
     rng = np.random.default_rng(seed)
-    camera = footage.recording.camera
+    camera, lens = pinhole(footage.recording.camera)
     m = CorrelationMatcher(geomap, camera, config.matcher)
     wide = CorrelationMatcher(geomap, camera, replace(config.matcher, scales=cfg.calibrate_scales))
     terrain, takeoff = geomap.terrain, None
@@ -70,6 +71,8 @@ def probe(
             continue
         if not matchable_view(frame.telemetry, config):
             continue
+        if lens is not None:
+            frame = replace(frame, image=lens.straighten(frame.image))
         tel = frame.telemetry
         yaw, height, altitude = tel.yaw, None, tel.altitude
         if takeoff is not None and tel.above_takeoff:

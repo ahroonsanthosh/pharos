@@ -40,6 +40,7 @@ from pharos.nav.filter import FilterConfig, PoseFilter
 from pharos.nav.window import PoseWindow, WindowConfig
 from pharos.telemetry import ON_GROUND_M
 from pharos.types import Estimate, Fix, Frame, HeightField, Status, Telemetry
+from pharos.vision.lens import pinhole
 from pharos.vision.matcher import (
     CorrelationMatcher,
     Matcher,
@@ -212,6 +213,9 @@ class Localizer:
         """``takeoff`` is where the aircraft took off (world coordinates), if known."""
         self.cfg = cfg or LocalizerConfig()
         self.map = geomap
+        # A distorting lens: frames are straightened on arrival, and everything else
+        # works with the pinhole camera that leaves.
+        camera, self.lens = pinhole(camera)
         self.camera = camera
         self.matcher = matcher or CorrelationMatcher(geomap, camera, self.cfg.matcher)
         self.terrain = geomap.terrain
@@ -251,6 +255,8 @@ class Localizer:
 
     def process(self, frame: Frame) -> Estimate:
         start = time.perf_counter()
+        if self.lens is not None:
+            frame = replace(frame, image=self.lens.straighten(frame.image))
         self._height = self._height_field(frame.telemetry)
         belief = self._belief(frame.t) if self._height is not None else None
         frame = self._above_ground(frame, belief)

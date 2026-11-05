@@ -4,7 +4,7 @@ The simulator writes exactly the format a real flight is converted to, so the
 localizer cannot tell them apart::
 
     recording/
-      camera.json      {"width", "height", "fx", "fy", "cx", "cy"}
+      camera.json      {"width", "height", "fx", "fy", "cx", "cy", "dist"?}
       telemetry.jsonl  one line per frame to localize:
                        {"t", "image": "frames/000000.jpg"}  or  {"t", "frame": <video index>}
                        plus "altitude_m", "yaw_deg" (null if no compass),
@@ -51,7 +51,15 @@ def save_recording(rec: Recording, path: str | Path, jpeg_quality: int = 92) -> 
     c = rec.camera
     (root / "camera.json").write_text(
         json.dumps(
-            {"width": c.width, "height": c.height, "fx": c.fx, "fy": c.fy, "cx": c.cx, "cy": c.cy},
+            {
+                "width": c.width,
+                "height": c.height,
+                "fx": c.fx,
+                "fy": c.fy,
+                "cx": c.cx,
+                "cy": c.cy,
+                **({"dist": list(c.dist)} if c.dist else {}),
+            },
             indent=2,
         )
     )
@@ -71,7 +79,8 @@ def save_recording(rec: Recording, path: str | Path, jpeg_quality: int = 92) -> 
 
 def load_recording(path: str | Path) -> Recording:
     root = Path(path)
-    camera = Camera(**json.loads((root / "camera.json").read_text()))
+    intrinsics = json.loads((root / "camera.json").read_text())
+    camera = Camera(**{**intrinsics, "dist": tuple(intrinsics.get("dist", ()))})
     rows = _read_jsonl(root / "telemetry.jsonl")
     truth = None
     if (root / "truth.jsonl").exists():

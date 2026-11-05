@@ -8,7 +8,7 @@ one is trusted and further off.
 
 ## Benchmark
 
-Thirty-one scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
+Thirty-two scenarios in `src/pharos/sim/scenarios/`, each a 60 s flight
 at 180 m (`hills` at 120 m, `valley` at 110 m, the three Irish ones 120 s
 at 110 m with a 16:9 camera, and the fourteen `stress_` ones as their files say)
 over a 1.6 km × 1.6 km world, localized at 2 Hz against a summer
@@ -48,6 +48,7 @@ scenario starts from a last GNSS fix:
 | stress_video | 87% | 11.5 | 1.1 | 2.6 | 0.2 | 87% | 0.0% | 12 | 100% | 223 |
 | tilted_camera | 85% | 9.0 | 1.3 | 2.8 | 0.1 | 85% | 0.0% | 9 | 100% | 307 |
 | valley | 83% | 10.0 | 1.0 | 2.0 | 0.1 | 83% | 0.0% | 10 | 100% | 251 |
+| wide_lens | 84% | 9.5 | 1.4 | 2.7 | 0.1 | 84% | 0.0% | 10 | 100% | 242 |
 | winter_snow | 86% | 8.5 | 1.5 | 3.5 | 0.1 | 86% | 0.0% | 8 | 100% | 268 |
 <!-- bench:end -->
 
@@ -451,6 +452,35 @@ confirm_footprints: 1.0
 distinct_footprints: 2.5
 ```
 
+### Lens distortion (Pharos 0.15)
+
+Pharos used to take every frame as a perfect pinhole image. A real lens bows
+straight lines, most at the frame's edges, and those are the ground a tilted
+or banked view sees furthest away. Frames are now straightened on arrival
+when the camera's distortion is known (OpenCV's k1, k2, p1, p2, k3), and the
+straightened view is cropped just enough to leave no empty corners, since the
+matcher compares the whole frame shape against the map. `pharos lens`
+measures the coefficients and the field of view from photos or a video of a
+printed checkerboard; on synthetic views through a 75°, k1 -0.2 lens it
+found 74.9° and k1 -0.202.
+
+The simulator now renders through a lens too, so the cost of ignoring one
+is measured. Median and 95th-percentile error of trusted positions, with
+and without telling Pharos the lens (a perfect lens for comparison):
+
+| flight | lens | perfect | told | not told |
+|---|---|---|---|---|
+| tilted camera (25°) | strong (k1 -0.3, k2 0.1) | 1.3 / 2.8 m | 1.4 / 2.7 m | 5.3 / 9.1 m |
+| tilted camera (25°) | mild (k1 -0.1) | 1.3 / 2.8 m | 1.2 / 2.3 m | 2.4 / 4.1 m |
+| straight down | strong | 1.4 / 2.5 m | 1.3 / 2.7 m | 1.5 / 3.2 m |
+| Irish pasture, straight down | strong | 1.1 / 2.5 m | 1.1 / 2.2 m | 1.5 / 3.1 m |
+
+Told, every run matched a perfect lens. Not told, coverage hardly changed and
+nothing was trusted wrongly, but a strong lens on a tilted camera made
+positions four times less precise. `wide_lens` keeps that case in the
+benchmark. Most DJI video is already corrected in the camera; action and FPV
+cameras and raw wide lenses are where this matters.
+
 ## Open problems, in detail
 
 * **Acquisition speed.** A whole-map search normalizes the frame-shaped
@@ -488,6 +518,4 @@ distinct_footprints: 2.5
   (`--dem`, often 1 m) would capture them where a low flight sees them, and
   free global canopy-height maps (10 m from ETH Zurich, 1 m from Meta and
   WRI) could raise the terrain to the crowns where there is no lidar.
-* **Lens distortion:** consumer cameras need undistorting; it matters most at
-  the image edges a banked view relies on.
 * **More real flights:** a DJI MP4 + SRT gives ground truth for free.

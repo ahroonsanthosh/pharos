@@ -81,7 +81,7 @@ A recording is a directory (see `pharos.recording`):
 
 ```
 recording/
-  camera.json       {"width", "height", "fx", "fy", "cx", "cy"} for undistorted frames
+  camera.json       {"width", "height", "fx", "fy", "cx", "cy", "dist"?}, dist: lens distortion
   telemetry.jsonl   one line per frame to localize
   frames/*.jpg      or a single video.mp4
   truth.jsonl       optional reference positions for evaluation
@@ -116,8 +116,9 @@ recording format above is only needed for simulated flights.
 * **Calibration, once per camera:** run `pharos probe` on a flight with
   GNSS. Its `calibration` block gives the camera's mount misalignment
   (`--mount-offset FORWARD RIGHT`, degrees) and the scale error, both as
-  height ratio and as the equivalent field of view (`--hfov`). Lens
-  distortion is not modelled; undistort strongly distorted footage first.
+  height ratio and as the equivalent field of view (`--hfov`). For a wide
+  or distorting lens, measure it first with `pharos lens` on a few views of
+  a printed checkerboard, and pass its `--hfov` and `--lens` values.
 * **Ground truth for free:** the aircraft's own GNSS is never given to the
   localizer, only used to score it, so every real flight is also an
   evaluation run.

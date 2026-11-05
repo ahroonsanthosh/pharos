@@ -22,6 +22,7 @@ from pharos.sim.trajectory import TrajectorySpec, generate_trajectory
 from pharos.sim.world import apply_changes, generate_terrain, generate_world, surface_height
 from pharos.terrain import Terrain
 from pharos.types import Frame, GroundTruth, Telemetry
+from pharos.vision.lens import distort, margin_needed
 
 
 def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
@@ -41,6 +42,17 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
     texture = sc.world.fine_texture
 
     camera = Camera.from_fov(sc.camera.width, sc.camera.height, sc.camera.hfov_deg)
+    lens = replace(camera, dist=tuple(sc.camera.distortion)) if any(sc.camera.distortion) else None
+    margin = margin_needed(lens) if lens is not None else 0
+    # Through a lens, render a wider pinhole view and bend it as the lens does.
+    view = Camera(
+        camera.width + 2 * margin,
+        camera.height + 2 * margin,
+        camera.fx,
+        camera.fy,
+        camera.cx + margin,
+        camera.cy + margin,
+    )
     truth = generate_trajectory(sc.trajectory, geomap.extent, sc.seed + 2)
     if any(sc.map_crop_m):
         geomap = _cropped(geomap, sc.map_crop_m)
@@ -51,20 +63,25 @@ def simulate(sc: Scenario) -> tuple[GeoMap, Recording]:
             takeoff = (truth[0].x, truth[0].y)
     rng = np.random.default_rng(sc.seed + 3)
     sensors = _SensorModel(sc.telemetry, rng, truth, above)
-    drops = _raindrops(camera, sc.camera.raindrops, np.random.default_rng(sc.seed + 5))
+    drops = [
+        (u + margin, v + margin, r)
+        for u, v, r in _raindrops(camera, sc.camera.raindrops, np.random.default_rng(sc.seed + 5))
+    ]
     frames, kept, still = [], [], None
     for i, g in enumerate(truth):
         lost = _within(g.t, sc.camera.dropped)
         if not lost and (still is None or not _within(g.t, sc.camera.freezes)):
             still = render_frame(
-                ground, camera, g, sc.camera, rng, geomap.terrain, heights, texture, drops
+                ground, view, g, sc.camera, rng, geomap.terrain, heights, texture, drops
             )
+            if lens is not None:
+                still = distort(still, lens, margin)
         tel = sensors.read(i)  # after rendering, as the shared random draws always were
         if lost:
             continue  # no frame at all
         frames.append(Frame(g.t, still, tel))  # frozen video repeats its last image
         kept.append(g)
-    return geomap, Recording(camera, frames, kept, takeoff)
+    return geomap, Recording(lens or camera, frames, kept, takeoff)
 
 
 def _cropped(geomap: GeoMap, crop_m) -> GeoMap:

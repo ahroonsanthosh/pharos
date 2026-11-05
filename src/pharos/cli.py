@@ -1,4 +1,4 @@
-"""Command line: ``pharos analyze | probe | sync | serve | simulate | localize | bench``."""
+"""Command line: ``pharos analyze | probe | sync | lens | serve | simulate | localize | bench``."""
 
 from __future__ import annotations
 
@@ -88,7 +88,28 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--start", type=float, default=0.0, help="video time to start at, seconds")
     p.add_argument("--end", type=float, help="video time to stop at (default: start + 120 s)")
     p.add_argument("--span", type=float, default=2.0, help="search this far around the guess")
+    p.add_argument(
+        "--lens",
+        type=float,
+        nargs="+",
+        metavar="K",
+        help="lens distortion coefficients k1 [k2 [p1 p2 [k3]]], as pharos lens measures them",
+    )
     p.set_defaults(func=_sync)
+
+    p = sub.add_parser(
+        "lens", help="measure a camera's field of view and lens distortion from a checkerboard"
+    )
+    p.add_argument(
+        "footage", type=Path, help="video, or folder of photos, of a printed checkerboard"
+    )
+    p.add_argument(
+        "--board",
+        default="9x6",
+        help="inner corners across x down, e.g. 9x6 for a board of 10 x 7 squares",
+    )
+    p.add_argument("--images", type=int, default=60, help="video: frames to try, spread evenly")
+    p.set_defaults(func=_lens)
 
     p = sub.add_parser("serve", help="live service: ingest feeds, dashboard at http://HOST:PORT")
     p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to accept other devices")
@@ -153,6 +174,13 @@ def _footage_args(p: argparse.ArgumentParser) -> None:
         help="take heights above takeoff as heights above ground",
     )
     p.add_argument("--rate", type=float, default=2.0, help="video frames analyzed per second")
+    p.add_argument(
+        "--lens",
+        type=float,
+        nargs="+",
+        metavar="K",
+        help="lens distortion coefficients k1 [k2 [p1 p2 [k3]]], as pharos lens measures them",
+    )
     p.add_argument("--map-gsd", type=float, default=1.0, help="matching resolution, m/px")
     p.add_argument(
         "--map-accuracy",
@@ -184,6 +212,7 @@ def _load_footage_and_map(args):
         )
         if args.takeoff:
             footage.takeoff = tuple(args.takeoff)
+        _with_lens(footage.recording, args.lens)
         return footage
 
     footage = load()
@@ -196,6 +225,14 @@ def _load_footage_and_map(args):
         telemetry.terrain_database = True  # no terrain model: the autopilot's, if it logged one
         footage = load()
     return footage, geomap
+
+
+def _with_lens(recording, coefficients) -> None:
+    """Tell the recording's camera its lens distortion (``--lens``)."""
+    if coefficients:
+        if len(coefficients) > 5:
+            raise SystemExit("--lens takes at most 5 coefficients: k1 k2 p1 p2 k3")
+        recording.camera = replace(recording.camera, dist=tuple(coefficients))
 
 
 def _terrain(geomap: GeoMap, dem: Path | None, takeoff) -> Terrain | None:
@@ -254,6 +291,7 @@ def _sync(args) -> None:
     footage = load_footage(
         args.video, hfov_deg=args.hfov, telemetry=telemetry, start_s=args.start, end_s=end
     )
+    _with_lens(footage.recording, args.lens)
     result = estimate_sync(footage.recording, telemetry, footage.recording.camera, args.span)
     for offset, jitter in result.curve:
         print(f"  {args.log_sync + offset:7.2f} s  odometry jitter {jitter:6.2f} m")
@@ -263,6 +301,64 @@ def _sync(args) -> None:
     )
     if result.contrast < 0.15:
         print("warning: weak minimum; pick a stretch with turns, or a longer one")
+
+
+def _lens(args) -> None:
+    from pharos.vision.lens import calibrate
+
+    try:
+        cols, rows = (int(v) for v in args.board.lower().split("x"))
+    except ValueError:
+        raise SystemExit(
+            f"--board is inner corners across x down, like 9x6, not {args.board!r}"
+        ) from None
+    images = _calibration_images(args.footage, args.images)
+    try:
+        result = calibrate(images, (cols, rows))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    c = result.camera
+    coefficients = " ".join(f"{v:g}" for v in c.dist)
+    print(f"found the board in {result.views} images; average fit error {result.rms_px:.2f} px")
+    if result.rms_px > 1.0:
+        print("warning: a loose fit; use sharper views, and a board that lies flat")
+    print(f"field of view: {result.hfov_deg:.1f} degrees across, at {c.width} x {c.height}")
+    print(
+        f"for pharos analyze, probe and sync:  --hfov {result.hfov_deg:.1f} --lens {coefficients}"
+    )
+    print(
+        f"in the dashboard: Horizontal FOV {result.hfov_deg:.1f}, Lens distortion "
+        + ", ".join(f"{v:g}" for v in c.dist)
+    )
+
+
+def _calibration_images(path: Path, count: int):
+    """Images of the board: every photo in a folder, or ``count`` frames spread over a video."""
+    if path.is_dir():
+        files = sorted(f for f in path.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png"))
+        return (_shrunk(cv2.imread(str(f))) for f in files)
+    cap = cv2.VideoCapture(str(path))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if not cap.isOpened() or total <= 0:
+        raise SystemExit(f"cannot read {path} as a video or a folder of photos")
+
+    def frames():
+        for i in range(count):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * total / count))
+            ok, image = cap.read()
+            if ok:
+                yield _shrunk(image)
+        cap.release()
+
+    return frames()
+
+
+def _shrunk(image, width: int = 1920):
+    """At most ``width`` pixels across: distortion and field of view do not depend on size."""
+    h, w = image.shape[:2]
+    if w <= width:
+        return image
+    return cv2.resize(image, (width, round(h * width / w)), interpolation=cv2.INTER_AREA)
 
 
 def _simulate(args) -> None:

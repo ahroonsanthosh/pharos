@@ -22,6 +22,7 @@ GNSS and no learned weights, and it runs on a CPU.
 | `terrain` | Ground elevation under a map (Copernicus GLO-30 fetched and cached, or any DEM GeoTIFF). |
 | `types` | Plain dataclasses passed between stages (`Frame`, `Telemetry`, `Fix`, `Estimate`, ...). |
 | `recording` | On-disk flight format shared by the simulator and real flights. Lazy frame decoding. |
+| `vision.lens` | Lens distortion: straightens frames into the pinhole camera everything else assumes; measures a lens from checkerboard views. |
 | `vision.rectify` | Warps a frame onto the ground plane at map resolution using altitude and camera tilt. |
 | `vision.features` | Appearance-invariant dense orientation field (see below). |
 | `vision.correlate` | Masked normalized cross-correlation via FFT; peak finding and sub-pixel refinement. |
@@ -36,7 +37,7 @@ GNSS and no learned weights, and it runs on a CPU.
 | `footage`, `analyze` | Recorded videos and photo sets (EXIF, DJI and senseFly XMP) localized offline, with exports. |
 | `sync` | Finds where a video starts in its flight log, from the footage alone. |
 | `server.*` | Live service: feed runner (any video source + telemetry), map store, FastAPI app and dashboard. |
-| `cli` | `pharos analyze`, `probe`, `sync`, `serve`, `simulate`, `localize`, `bench`. |
+| `cli` | `pharos analyze`, `probe`, `sync`, `lens`, `serve`, `simulate`, `localize`, `bench`. |
 
 ## Conventions
 

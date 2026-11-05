@@ -22,7 +22,7 @@ import math
 import os
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -70,6 +70,8 @@ class FeedSpec:
     # Begin from the aircraft's first GNSS fix (then never use GNSS again, so jamming or
     # spoofing later cannot pull the track away); off: a cold start, GNSS only shown.
     start_from_gnss: bool = False
+    # Lens distortion (k1, k2, p1, p2, k3), or fewer, as ``pharos lens`` measures it.
+    lens: tuple[float, ...] = ()
 
 
 def check_spec(spec: FeedSpec, maps: list[str], scenarios: list[str]) -> None:
@@ -85,6 +87,18 @@ def check_spec(spec: FeedSpec, maps: list[str], scenarios: list[str]) -> None:
     for name in ("source", "map", "name", "telemetry", "mount"):
         if not isinstance(getattr(spec, name), str):
             raise ValueError(f"{name} must be text")
+    lens = spec.lens if isinstance(spec.lens, tuple | list) else None
+    if (
+        lens is None
+        or len(lens) > 5
+        or not all(
+            isinstance(k, int | float) and not isinstance(k, bool) and math.isfinite(k)
+            for k in lens
+        )
+    ):
+        raise ValueError("lens distortion is up to 5 numbers: k1, k2, p1, p2, k3")
+    if any(abs(k) > 10 for k in lens):
+        raise ValueError("lens distortion coefficients that large are not a real lens")
     if not isinstance(spec.start_from_gnss, bool):
         raise ValueError("start_from_gnss must be true or false")
     if not spec.source.strip():
@@ -250,6 +264,8 @@ class Feed:
             if localizer is None:
                 h, w = image.shape[:2]
                 camera = self.camera or Camera.from_fov(w, h, self.spec.hfov_deg)
+                if self.spec.lens and not self.spec.source.startswith("demo:"):
+                    camera = replace(camera, dist=tuple(self.spec.lens))
                 if sample.telemetry.above_takeoff and self.map_name:
                     geomap = self.store.with_terrain(self.map_name)
                 localizer = Localizer(geomap, camera)

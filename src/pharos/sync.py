@@ -22,6 +22,7 @@ from pharos.geometry import Camera, rot2
 from pharos.nav.localizer import LocalizerConfig, usable_view
 from pharos.telemetry import TelemetrySource
 from pharos.types import Frame
+from pharos.vision.lens import pinhole
 from pharos.vision.odometry import OdometryConfig, VisualOdometry
 
 _VIEW = LocalizerConfig()  # frames the localizer would skip are skipped here too
@@ -50,10 +51,11 @@ def estimate_sync(
     ``frames`` should cover a minute or more of flight with some manoeuvring;
     only their images and times are used.
     """
+    camera, lens = pinhole(camera)  # a distorting lens: odometry on straightened frames
     vo = VisualOdometry(camera, odometry)
     times, pairs, prev = [], [], None
     for frame in frames:
-        features = vo.features(frame.image)
+        features = vo.features(frame.image if lens is None else lens.straighten(frame.image))
         if prev is not None:
             times.append((prev[0], frame.t))
             pairs.append(vo.correspondences(prev[1], features))

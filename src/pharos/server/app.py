@@ -52,6 +52,7 @@ DEMO_FLIGHTS = {
     "land_change": "Years since the map was made",
     "spring_clouds_on_map": "Clouds on the map",
     "tilted_camera": "Forward-tilted camera",
+    "wide_lens": "Wide-angle lens",
 }
 STRESS_TESTS = {
     "stress_gnss_lost_low": "GPS jammed at 50 m",
