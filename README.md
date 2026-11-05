@@ -2,7 +2,7 @@
   <img src="docs/img/logo.png" alt="Pharos" width="420">
 </p>
 
-<h1 align="center">Pharos 0.12</h1>
+<h1 align="center">Pharos 0.12.1</h1>
 
 <p align="center">
   <a href="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml"><img src="https://github.com/ahroonsanthosh/pharos/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -46,51 +46,106 @@ Geográfico Nacional, CC BY 4.0.</sub>
 ## Run it on your own computer
 
 Pharos is meant to run on your own machine. Nothing is sent anywhere, it
-needs no account or internet once installed, and this is the only way to
-plug in a live drone. Any recent laptop works: Windows, macOS or Linux.
+needs no account, and after the first start it works without internet.
+Any recent laptop works: Windows, macOS or Linux. There are two ways to
+install it; pick one.
 
-**With Docker (easiest).** Install
-[Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker
-Engine on Linux), then in a terminal:
+### Option A: with Python
 
-```bash
-git clone https://github.com/ahroonsanthosh/pharos.git
+You need [Git](https://git-scm.com/downloads) and
+[Python 3.11 or newer](https://www.python.org/downloads/). On Windows, tick
+**Add python.exe to PATH** when installing Python. Open a terminal
+(**PowerShell** on Windows, **Terminal** on macOS and Linux) and type each
+line on its own, pressing Enter after each one.
+
+**1. Download Pharos** (once):
+
 ```
-
-```bash
+git clone https://github.com/ahroonsanthosh/pharos.git
 cd pharos
 ```
 
+**2. Install it** into its own folder, `.venv`, so nothing else on your
+computer is touched (once; takes a minute or two):
+
+Windows (PowerShell):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[server,geo]"
+```
+
+macOS and Linux:
+
 ```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[server,geo]"
+```
+
+**3. Start it.** Your browser opens the dashboard at
+**http://localhost:8000**:
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\pharos serve --open
+```
+
+macOS and Linux:
+
+```bash
+.venv/bin/pharos serve --open
+```
+
+Stop it with `Ctrl+C` in the terminal. **Next time**, open a terminal, go
+into the folder with `cd pharos`, and run step 3 again.
+
+**To update** to the latest version later, from the `pharos` folder run
+`git pull`, then step 2's second line again.
+
+### Option B: with Docker (includes live-stream support)
+
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(Docker Engine on Linux) and start it. Then, after step 1 above:
+
+```
 docker compose up
 ```
 
 The first start builds everything and takes a few minutes; after that it
-starts in seconds. Open **http://localhost:8000** in your browser. Stop it
-with `Ctrl+C`. Your maps and uploaded videos stay in the `pharos-data`
-folder.
+starts in seconds. Open **http://localhost:8000**. Stop it with `Ctrl+C`.
+Your maps and uploaded videos stay in the `pharos-data` folder. This option
+also runs [MediaMTX](https://github.com/bluenviron/mediamtx), which receives
+video pushed from a drone controller or OBS; with Option A, run MediaMTX
+yourself if you need that.
 
-**Without Docker.** With Python 3.11 or newer, from the `pharos` folder:
+### If something goes wrong
 
-```bash
-pip install -e ".[server,geo]"
-```
+* **`'pharos' is not recognized`** or **`does not appear to be a Python
+  project`**: you are not inside the `pharos` folder, or skipped step 2.
+  Run `cd pharos` first, and start Pharos with the full path from step 3.
+* **`The module '.venv' could not be loaded`** or **`no such option`**:
+  step 2 didn't finish. Run its second line again on its own, paste it
+  only once, and wait until it ends before starting Pharos.
+* **`'&&' is not a valid statement separator`**: older PowerShell runs one
+  command per line. Type each line separately.
+* **`python` is not found, or the version is below 3.11**: install Python
+  from python.org (tick **Add python.exe to PATH**), then open a new
+  terminal.
+* **`destination path 'pharos' already exists`**: you downloaded it before.
+  Run `cd pharos`, then `git pull` to update it.
+* **The page doesn't open**: go to http://localhost:8000 yourself while the
+  terminal is still running.
 
-```bash
-pharos serve --open
-```
+### First run
 
-That opens the dashboard in your browser. Live streams pushed from a drone
-controller also need [MediaMTX](https://github.com/bluenviron/mediamtx/releases)
-running alongside (Docker includes it).
-
-**First run.** Click **New feed**, keep **Demo flight** and press
-**Start**. A simulated flight is generated and tracked live in about 15 s.
-After that, try your own footage: a DJI controller or OBS over RTMP/SRT,
-RTSP/HLS/UDP streams, a capture card or webcam, or recorded video with its
-DJI `.SRT` file. If the drone reports GPS, I draw it next to the estimate so
-you can judge the accuracy for yourself. Setup for each source, ports and
-firewall notes are in [docs/laptop.md](docs/laptop.md).
+Click **Start the demo flight**. A simulated flight is generated and tracked
+live in about 15 s. After that, use **New feed** for your own footage: a DJI
+controller or OBS over RTMP/SRT, RTSP/HLS/UDP streams, a capture card or
+webcam, or recorded video with its DJI `.SRT` file. If the drone reports
+GPS, I draw it next to the estimate so you can judge the accuracy for
+yourself. Setup for each source, ports and firewall notes are in
+[docs/laptop.md](docs/laptop.md).
 
 ![Adding a feed](docs/img/feed.jpg)
 
@@ -100,6 +155,9 @@ receiver that looks confident but is drifting away, which is exactly what a
 spoofed one does.
 
 ## Recorded footage
+
+From the `pharos` folder (with Option A, write `.\.venv\Scripts\pharos` on
+Windows or `.venv/bin/pharos` on macOS and Linux instead of `pharos`):
 
 ```bash
 pharos analyze DJI_0042.MP4 --map area.tif --hfov 70
@@ -136,6 +194,8 @@ OpenAerialMap or Sentinel-2. More detail in
 [docs/architecture.md](docs/architecture.md).
 
 ## Working on it
+
+With the environment from Option A activated (or using its full paths):
 
 ```bash
 pip install -e ".[dev,server,geo]"

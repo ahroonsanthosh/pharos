@@ -7,3 +7,4 @@ runs
 data
 pharos-data
 tests
+.venv
